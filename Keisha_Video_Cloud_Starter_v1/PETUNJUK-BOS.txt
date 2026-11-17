@@ -1,0 +1,17 @@
+KEISHA VIDEO CLOUD v1 | RUANG CUAN DIGITAL
+
+TUJUAN LANGKAH SEKARANG: unggah kode ke GitHub.
+1. Extract ZIP ini, lalu masuk ke isi folder.
+2. Buka https://github.com/kitabertiga3/keisha-video-cloud
+3. Klik Add file > Upload files.
+4. Drag dan drop file dari hasil extract: Dockerfile, server.py,
+   video_engine.py, index.html, requirements.txt, serta folder assets.
+   README.md boleh diganti, boleh juga biarkan yang lama.
+   Folder tests dan file .dockerignore juga boleh diikutkan.
+5. Klik Commit changes.
+6. Setelah itu lanjut ke Render > New Web Service > Public Git Repository.
+
+JANGAN UNGGAH: token Telegram, API keys, password, atau file .env.
+KODE INI PAKET DEMO MP4 20 DETIK TANPA VOICE-OVER DAN TANPA AUTOPOSTING.
+
+PENTING: Render punya pilihan Free, tetapi batasan free tier berlaku.
