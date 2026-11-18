@@ -32,8 +32,12 @@ def natural_audio(text: str, output: Path) -> float:
                         '-ar','48000','-ac','1','-c:a','pcm_s16le',str(dst)],
                        check=True,timeout=45)
     model=TTSModel.load_model(config=CONFIG, eos_threshold=-6.0)
-    state=model.get_state_for_audio_prompt(str(dst))
-    with __import__('torch').inference_mode():
+    # Pocket TTS spawns decoder/generator threads. Do not use inference_mode():
+    # tensors made in inference mode cannot safely be updated in those threads.
+    # The Pocket TTS API already uses no_grad() internally for generation.
+    import torch
+    with torch.no_grad():
+        state=model.get_state_for_audio_prompt(str(dst))
         result=model.generate_audio(state,text)
     samples=result.detach().cpu().float().numpy().reshape(-1)
     if not len(samples) or not np.isfinite(samples).all():
