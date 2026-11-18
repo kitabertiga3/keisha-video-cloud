@@ -1,4 +1,4 @@
-name: Keisha - Studio MP4 V3.1
+name: Keisha - Studio MP4 V3.2 Nilasari
 
 on:
   workflow_dispatch:
@@ -13,8 +13,8 @@ on:
         required: false
         type: string
       voice:
-        description: 'otomatis (suara gratis), sintetis, natural (butuh lisensi), mati'
-        default: 'otomatis'
+        description: 'nilasari (wajib ElevenLabs komersial), mati. Otomatis/natural = nilasari'
+        default: 'nilasari'
         required: false
         type: string
       visuals:
@@ -46,8 +46,30 @@ jobs:
         with:
           python-version: '3.13'
 
-      - name: FFmpeg, font, dan suara gratis Indonesia
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg fonts-dejavu-core espeak-ng
+      - name: Periksa akses suara Nilasari sebelum instalasi
+        env:
+          VIDEO_VOICE: ${{ inputs.voice }}
+          ELEVENLABS_API_KEY: ${{ secrets.ELEVENLABS_API_KEY }}
+          ELEVENLABS_COMMERCIAL_OK: ${{ secrets.ELEVENLABS_COMMERCIAL_OK }}
+        run: |
+          python - <<'PYCHECK'
+          import os
+          if os.environ.get('VIDEO_VOICE', '').lower() != 'mati':
+              if not os.environ.get('ELEVENLABS_API_KEY', '').strip():
+                  raise SystemExit('GAGAL SEBELUM RENDER: tambahkan secret ELEVENLABS_API_KEY pada GitHub Actions. Suara Nilasari perlu API key ElevenLabs.')
+              if os.environ.get('ELEVENLABS_COMMERCIAL_OK', '').lower() not in ('true','1','yes'):
+                  raise SystemExit('GAGAL SEBELUM RENDER: lisensi komersial perlu diaktifkan dan ELEVENLABS_COMMERCIAL_OK=true. Suara robot tidak digunakan.')
+          print('Konfigurasi suara telah diisi; hak akses asli akan dicek oleh ElevenLabs saat pemanggilan API.')
+          PYCHECK
+
+      - name: Siapkan FFmpeg dan font jika belum tersedia
+        run: |
+          if ! command -v ffmpeg >/dev/null 2>&1 || ! test -r /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf; then
+            sudo apt-get update -qq
+            sudo apt-get install -y ffmpeg fonts-dejavu-core
+          else
+            echo 'FFmpeg dan font sudah tersedia; lewati instalasi ulang.'
+          fi
 
       - name: Pillow
         run: python -m pip install -r Keisha_Video_Cloud_Starter_v1/requirements.txt
@@ -56,7 +78,7 @@ jobs:
         working-directory: Keisha_Video_Cloud_Starter_v1
         run: python -m unittest discover -s tests -v
 
-      - name: Produksi desain beragam + narasi
+      - name: Produksi desain beragam + suara Nilasari tersinkron
         working-directory: Keisha_Video_Cloud_Starter_v1
         env:
           VIDEO_NASKAH: ${{ inputs.naskah }}
@@ -65,7 +87,6 @@ jobs:
           VIDEO_CTA: ${{ inputs.cta }}
           VIDEO_VISUALS: ${{ inputs.visuals }}
           ELEVENLABS_API_KEY: ${{ secrets.ELEVENLABS_API_KEY }}
-          ELEVENLABS_VOICE_ID: ${{ secrets.ELEVENLABS_VOICE_ID }}
           ELEVENLABS_COMMERCIAL_OK: ${{ secrets.ELEVENLABS_COMMERCIAL_OK }}
         run: python render_studio.py
 
@@ -112,8 +133,8 @@ jobs:
           root=Path('Keisha_Video_Cloud_Starter_v1/hasil')
           path=root/'keisha-rcd-video.mp4'
           data=json.loads((root/'metadata.json').read_text(encoding='utf-8'))
-          desc={'sintetis':'suara Indonesia sintetis','natural':'suara natural berlisensi','mati':'tanpa suara'}[data['voice']]
-          caption=(f"🎬 Keisha Studio v3.1 | MP4 berhasil\n"
+          desc={'nilasari':'Nilasari (ElevenLabs, berlisensi)','mati':'tanpa suara'}[data['voice']]
+          caption=(f"🎬 Keisha Studio v3.2 Nilasari | MP4 berhasil\n"
                    f"Desain per slide: {', '.join(data['scene_styles'])}\n"
                    f"Audio terverifikasi: {'ya' if data['audio_verified'] else 'tidak'} | {desc}\n"
                    f"Durasi: {data['duration']} detik\n"
