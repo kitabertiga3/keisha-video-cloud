@@ -2,6 +2,15 @@ name: Keisha - Buat MP4
 
 on:
   workflow_dispatch:
+    inputs:
+      naskah:
+        description: 'Topik atau naskah baru Keisha (wajib, tidak boleh kosong)'
+        required: true
+        type: string
+      cta:
+        description: 'CTA opsional'
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -29,15 +38,12 @@ jobs:
         working-directory: Keisha_Video_Cloud_Starter_v1
         run: python -m unittest discover -s tests -v
 
-      - name: Buat video MP4 20 detik
+      - name: Buat video baru sesuai naskah (20 detik)
         working-directory: Keisha_Video_Cloud_Starter_v1
-        run: |
-          python - <<'PY'
-          from server import DEFAULT_HEADINGS, DEFAULT_BODIES, DEFAULT_CTA
-          from video_engine import build_video
-          p = build_video('hasil', DEFAULT_HEADINGS, DEFAULT_BODIES, DEFAULT_CTA)
-          print('MP4 dibuat:', p)
-          PY
+        env:
+          VIDEO_NASKAH: ${{ inputs.naskah }}
+          VIDEO_CTA: ${{ inputs.cta }}
+        run: python render_custom.py
 
       - name: Simpan video untuk diunduh
         uses: actions/upload-artifact@v4
@@ -72,7 +78,7 @@ jobs:
 
           boundary = 'keisha-' + secrets.token_hex(16)
           caption = (
-              '🎬 Keisha | Uji produksi MP4 berhasil.\n'
+              '🎬 Keisha | MP4 baru sesuai naskah berhasil dibuat.\n'
               'Video faceless 20 detik, tanpa suara.\n'
               'STATUS: DRAF, BELUM DIPOSTING.\n'
               'Periksa isi, lisensi media, dan caption sebelum publikasi.'
@@ -104,5 +110,5 @@ jobs:
                   raise RuntimeError('Telegram menolak kiriman')
           except Exception:
               raise RuntimeError('Gagal kirim Telegram. Periksa token, chat ID, dan izin bot tanpa membagikan rahasia.') from None
-          print('MP4 uji berhasil dikirim ke Telegram. Belum diposting ke sosial media.')
+          print('Video berdasarkan naskah terkirim ke Telegram. Belum diposting ke sosial media.')
           PY
