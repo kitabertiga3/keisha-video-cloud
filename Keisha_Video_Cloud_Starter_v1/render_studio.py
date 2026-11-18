@@ -1,11 +1,8 @@
-"""Ruang Cuan Digital | Keisha Studio v3.1.
-Original text-vector compositions with synchronized continuous ElevenLabs Nilasari narration.
-Requires licensed ElevenLabs API for promotional/commercial use. No robotic voice fallback.
+"""Ruang Cuan Digital | Keisha Studio v3.3, suara Indonesia offline Piper TTS.
+Lima gaya visual dengan satu jalur narasi kontinu, tanpa API suara berbayar.
 """
 from __future__ import annotations
 
-import base64
-import difflib
 import hashlib
 import json
 import math
@@ -314,103 +311,99 @@ def make_card(path, i, heading, body, cta, style, seed, motif="ide", accent_hex=
     im.save(path,optimize=True)
 
 
-NILASARI_VOICE_ID = 'NPDHDOOQCSyifTJZOe6J'  # Verified ElevenLabs Voice Library: Nilasari
+# Model suara Indonesia Piper (sekali diunduh, bisa digunakan offline tanpa kuota TTS).
+PIPER_MODEL_NAME = 'id_ID-news_tts-medium.onnx'
+PIPER_MODEL_DIR = ROOT / '.piper_models'
+PIPER_BASE_URL = 'https://huggingface.co/rhasspy/piper-voices/resolve/main/id/id_ID/news_tts/medium/'
+PIPER_ONNX_MD5 = '17de01db7ac654655436b6e509893c72'
+PIPER_CONFIG_MD5 = 'c023cfa031cc9ed4cf5dd8d2ef1e48ed'
 
 
 def narration_for_scene(heading, body, cta=''):
-    """Narration speaks exactly the on-screen heading, body and optional CTA."""
-    parts = [heading.rstrip(' .!?'), body.rstrip(' .!?')]
+    parts = [str(heading).rstrip(' .!?'), str(body).rstrip(' .!?')]
     if cta:
-        parts.append(cta.rstrip(' .!?'))
+        parts.append(str(cta).rstrip(' .!?'))
     return '. '.join(x for x in parts if x) + '.'
 
 
-def _align_index(original, produced, pos):
-    """Translate a narration character index to ElevenLabs alignment characters."""
-    if original == produced:
-        return pos
-    blocks = difflib.SequenceMatcher(a=original, b=produced, autojunk=False).get_matching_blocks()
-    for block in blocks:
-        if block.a <= pos < block.a + block.size:
-            return block.b + pos - block.a
-        if block.a > pos:
-            break
-    earlier = [b for b in blocks if b.a + b.size <= pos]
-    return min(len(produced) - 1, (earlier[-1].b + earlier[-1].size) if earlier else 0)
+def _valid_md5(path, expected):
+    if not path.is_file():
+        return False
+    digest = hashlib.md5()  # Integrity check against upstream model catalog; not a security signature.
+    with path.open('rb') as f:
+        for block in iter(lambda: f.read(2 * 1024 * 1024), b''):
+            digest.update(block)
+    return digest.hexdigest() == expected
 
 
-def nilasari_audio_with_timing(narration, scene_offsets, output):
-    """Generate ONE continuous voiceover; use ElevenLabs character timing for cuts.
+def ensure_piper_model():
+    '''Fetch the open model if absent. No voice API calls during TTS inference.'''
+    directory = Path(os.environ.get('PIPER_MODEL_DIR', str(PIPER_MODEL_DIR)))
+    directory.mkdir(parents=True, exist_ok=True)
+    model = directory / PIPER_MODEL_NAME
+    for name, checksum in ((PIPER_MODEL_NAME, PIPER_ONNX_MD5),
+                           (PIPER_MODEL_NAME + '.json', PIPER_CONFIG_MD5)):
+        target = directory / name
+        if _valid_md5(target, checksum):
+            continue
+        tmp = directory / (name + '.download')
+        try:
+            req = urllib.request.Request(PIPER_BASE_URL + name,
+                headers={'User-Agent': 'KeishaStudio/3.3 (Piper Voice Setup)'})
+            with urllib.request.urlopen(req, timeout=120) as response, tmp.open('wb') as f:
+                while True:
+                    chunk = response.read(1024 * 1024)
+                    if not chunk: break
+                    f.write(chunk)
+            if not _valid_md5(tmp, checksum):
+                raise RuntimeError('Checksum model Piper tidak sesuai katalog resmi')
+            tmp.replace(target)
+        except Exception as exc:
+            tmp.unlink(missing_ok=True)
+            raise RuntimeError('Gagal mengunduh model gratis Piper. Periksa jaringan Github Actions / Hugging Face: '
+                               + type(exc).__name__) from exc
+    return model
 
-    No per-slide TTS splicing, no eSpeak fallback. This preserves prosody and
-    fixes staccato/awkward breaks caused by joining five independent speech clips.
-    """
-    api = os.environ.get('ELEVENLABS_API_KEY', '').strip()
-    commercial_ok = os.environ.get('ELEVENLABS_COMMERCIAL_OK', '').lower() in ('true', '1', 'yes')
-    if not api or not commercial_ok:
-        raise RuntimeError(
-            'Suara Nilasari BELUM AKTIF. Tambahkan GitHub Actions secret '
-            'ELEVENLABS_API_KEY dari akun ElevenLabs berlisensi komersial dan '
-            'ELEVENLABS_COMMERCIAL_OK=true. Video dibatalkan, tanpa fallback robot.'
-        )
-    payload = json.dumps({
-        'text': narration,
-        'model_id': 'eleven_multilingual_v2',
-        'voice_settings': {'stability': 0.5, 'similarity_boost': 0.8, 'style': 0.12,
-                           'use_speaker_boost': True},
-    }, ensure_ascii=False).encode('utf-8')
-    url = (f'https://api.elevenlabs.io/v1/text-to-speech/{NILASARI_VOICE_ID}'
-           '/with-timestamps?output_format=mp3_44100_128')
-    request = urllib.request.Request(url, data=payload, method='POST', headers={
-        'xi-api-key': api, 'Content-Type': 'application/json', 'Accept': 'application/json'})
+
+def piper_audio(narration, output):
+    '''One offline synthesis invocation, producing a continuous WAV.'''
+    model = ensure_piper_model()
+    if not shutil.which('piper'):
+        raise RuntimeError('Piper belum diinstal. Periksa langkah Install Piper pada workflow.')
     try:
-        with urllib.request.urlopen(request, timeout=130) as response:
-            content = response.read(15_000_000)
-        data = json.loads(content)
-    except urllib.error.HTTPError as error:
-        if error.code in (401, 403):
-            message = 'API key tidak valid atau tidak berhak mengakses suara Nilasari.'
-        elif error.code in (400, 404, 422):
-            message = 'Voice Nilasari belum tersedia di akun. Tambahkan Nilasari dari ElevenLabs Voice Library.'
-        elif error.code == 429:
-            message = 'Kuota atau batas permintaan ElevenLabs habis.'
-        else:
-            message = f'ElevenLabs HTTP {error.code}.'
-        raise RuntimeError(message + ' Video tidak dibuat dengan suara robot.') from None
-    except (OSError, ValueError, TimeoutError) as error:
-        raise RuntimeError(f'Gagal meminta suara Nilasari: {type(error).__name__}. '
-                           'Periksa koneksi ElevenLabs; video belum dibuat.') from None
-    try:
-        mp3 = base64.b64decode(data['audio_base64'], validate=True)
-        chars = data['alignment']['characters']
-        times = data['alignment']['character_start_times_seconds']
-        ends = data['alignment']['character_end_times_seconds']
-        if len(chars) < 10 or len(chars) != len(times) or len(chars) != len(ends):
-            raise ValueError('alignment tidak valid')
-        returned_text = ''.join(chars)
-        similarity = difflib.SequenceMatcher(a=narration, b=returned_text,
-                                               autojunk=False).ratio()
-        if similarity < 0.75:
-            raise ValueError('naskah dan timing tidak sesuai')
-        output.write_bytes(mp3)
-        if len(mp3) < 1000:
-            raise ValueError('file audio terlalu kecil')
-        audio_length = duration(output)
-        if audio_length < 1:
-            raise ValueError('durasi audio tidak valid')
-        cuts = [0.0]
-        for pos in scene_offsets[1:]:
-            idx = _align_index(narration, returned_text, pos)
-            cuts.append(float(times[max(0, min(len(times)-1, idx))]))
-        if len(cuts) != 5 or any(b-a < .4 for a,b in zip(cuts, cuts[1:])):
-            raise ValueError('batas slide tidak valid')
-        if cuts[-1] >= audio_length - .4:
-            raise ValueError('audio tidak cocok dengan lima adegan')
-        return cuts, audio_length
-    except (ValueError, KeyError, TypeError, UnicodeError) as error:
-        output.unlink(missing_ok=True)
-        raise RuntimeError(f'Suara Nilasari diterima tapi timing bermasalah: {error}. '
-                           'Video dibatalkan agar tidak salah sinkron.') from None
+        run = subprocess.run([
+            'piper', '--model', str(model), '--output_file', str(output),
+            '--length_scale', '1.06',  # Slightly calmer Indonesian cadence.
+            '--noise_scale', '0.58', '--noise_w', '0.65',
+            '--sentence_silence', '0.18',
+        ], input=narration + '\n', text=True, capture_output=True, timeout=210)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise RuntimeError('Piper tidak selesai: ' + type(exc).__name__) from exc
+    if run.returncode:
+        raise RuntimeError('Piper gagal menyintesis narasi: ' + (run.stderr or run.stdout)[-900:])
+    if not output.is_file() or output.stat().st_size < 4000:
+        raise RuntimeError('File WAV Piper kosong / tidak valid.')
+    audio_length = duration(output)
+    if audio_length < 2:
+        raise RuntimeError('Narasi Piper terlalu singkat; periksa model dan naskah.')
+    return audio_length
+
+
+def approximate_cuts(sentences, audio_length):
+    '''Offline Piper lacks alignment; keep full uninterrupted audio and use rough timing.'''
+    if len(sentences) != 5:
+        raise ValueError('Butuh lima adegan')
+    # Weighted syllable-ish proxy avoids overly fast slides for long Indonesian words.
+    weights = [max(10.0, sum(0.6 + (1.15 if ch.lower() in 'aiueo' else 0.35)
+                                   for ch in text if ch.isalpha()) + 4.0)
+               for text in sentences]
+    total = sum(weights)
+    cuts = [0.0]
+    cumulative = 0.0
+    for x in weights[:-1]:
+        cumulative += x
+        cuts.append(audio_length * cumulative / total)
+    return cuts
 
 
 def create():
@@ -428,11 +421,11 @@ def create():
     style = 'otomatis' if style in ('otomatis', 'auto', '') else style
     if style not in STYLES + ('otomatis',):
         raise ValueError('Gaya tersedia: ' + ', '.join(STYLES))
-    voice = os.environ.get('VIDEO_VOICE', 'nilasari').lower().strip()
-    if voice in ('otomatis', 'natural', 'sintetis', ''):
-        voice = 'nilasari'  # Old commands never silently select the robotic voice.
-    if voice not in ('nilasari', 'mati'):
-        raise ValueError('Suara tersedia: nilasari atau mati')
+    voice = os.environ.get('VIDEO_VOICE', 'piper').lower().strip()
+    if voice in ('otomatis', 'natural', 'sintetis', 'nilasari', 'gratis', 'perempuan', ''):
+        voice = 'piper'  # Legacy Telegram commands use the free voice automatically.
+    if voice not in ('piper', 'mati'):
+        raise ValueError('Suara tersedia: piper (gratis) atau mati')
 
     art = storyboard(raw, style, seed)
     OUT.mkdir(parents=True, exist_ok=True)
@@ -443,20 +436,16 @@ def create():
                   art[i-1]['motif'], art[i-1]['accent'])
         clips.append(card)
 
-    mp3 = OUT / 'keisha-nilasari.mp3'
+    audio = OUT / 'keisha-suara-gratis.wav'
     if voice == 'mati':
         cuts = [4.0 * n for n in range(5)]
         speech_duration = 20.0
     else:
         sentences = [narration_for_scene(h, b, cta if i == 4 else '')
                      for i, (h, b) in enumerate(zip(headings, bodies))]
-        narration = '\n\n'.join(sentences)
-        offsets = []
-        pos = 0
-        for i, sentence in enumerate(sentences):
-            offsets.append(pos)
-            pos += len(sentence) + (2 if i != 4 else 0)
-        cuts, speech_duration = nilasari_audio_with_timing(narration, offsets, mp3)
+        narration = ' '.join(sentences)  # Satu tuturan panjang, bukan klip per slide.
+        speech_duration = piper_audio(narration, audio)
+        cuts = approximate_cuts(sentences, speech_duration)
 
     video_length = speech_duration + (0.40 if voice != 'mati' else 0)
     boundaries = cuts + [video_length]
@@ -476,10 +465,10 @@ def create():
         shutil.copyfile(silent, video)
     else:
         # Encode one AAC track from a continuous MP3. No independent WAV stitching.
-        ff('-i',silent,'-i',mp3,'-map','0:v:0','-map','1:a:0',
+        ff('-i',silent,'-i',audio,'-map','0:v:0','-map','1:a:0',
            '-c:v','copy','-c:a','aac','-b:a','160k','-ar','44100',
-           '-af','apad=pad_dur=0.40','-t',f'{video_length:.3f}',
-           '-movflags','+faststart',video)
+           '-af','highpass=f=70,lowpass=f=10500,acompressor=threshold=-20dB:ratio=2:attack=30:release=300,loudnorm=I=-17:TP=-2:LRA=10,apad=pad_dur=0.40',
+           '-t',f'{video_length:.3f}', '-movflags','+faststart',video)
     if not video.is_file() or video.stat().st_size < 5000:
         raise RuntimeError('MP4 hasil rendering tidak valid')
     verify = subprocess.run(['ffprobe','-v','error','-select_streams','a:0',
@@ -489,17 +478,20 @@ def create():
     has_audio = bool(verify.stdout.strip())
     if voice != 'mati' and not has_audio:
         raise RuntimeError('MP4 kehilangan audio. Tidak dikirim ke Telegram.')
-    info = {'version':'3.2','style':style,'scene_styles':[x['style'] for x in art],
+    info = {'version':'3.3','style':style,'scene_styles':[x['style'] for x in art],
             'visuals':art,'voice':voice,'audio_verified':has_audio,
             'duration':round(duration(video),1),
             'headings':headings,'bodies':bodies,'cta':cta,
             'narration_continuous':voice!='mati',
+            'audio_timing_exact':False,
             'scene_start_seconds':[round(v,3) for v in cuts],
-            'voice_id':NILASARI_VOICE_ID if voice!='mati' else None}
+            'voice_id':'id_ID-news_tts-medium' if voice!='mati' else None,
+            'scene_timing':'estimated_offline' if voice!='mati' else 'fixed_silent',
+            'tts_cloud_requests':0}
     (OUT/'metadata.json').write_text(json.dumps(info, ensure_ascii=False, indent=2),
                                     encoding='utf-8')
-    print('KEISHA STUDIO V3.2:', video, '| voice:', voice,
-          '| synchronized:', info['narration_continuous'],
+    print('KEISHA STUDIO V3.3 GRATIS:', video, '| voice:', voice,
+          '| one continuous audio:', info['narration_continuous'],
           '| audio verified:', has_audio, '| duration:', info['duration'])
 
 
