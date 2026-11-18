@@ -75,6 +75,59 @@ def storyboard(raw, style, seed):
     return results
 
 
+def parse_studio_script(raw):
+    """Validasi format naskah. Jangan membacakan karakter JSON sebagai teks video."""
+    text = str(raw or '').strip().lstrip('\ufeff')
+    # Mendukung JSON murni, atau kata pembuka sebelum objek JSON.
+    json_like = text.startswith('{') or ('"headings"' in text and '"bodies"' in text and '{' in text)
+    if json_like:
+        start = text.find('{')
+        try:
+            obj, pos = json.JSONDecoder().raw_decode(text[start:])
+        except (json.JSONDecodeError, ValueError) as err:
+            raise ValueError('Naskah JSON tidak valid. Periksa koma, tanda kurung, dan tanda kutip.') from err
+        if text[start + pos:].strip():
+            raise ValueError('Ada karakter di belakang naskah JSON. Sisakan hanya objek naskah.')
+        if not isinstance(obj, dict):
+            raise ValueError('Naskah JSON wajib berupa objek.')
+        headings = obj.get('headings')
+        bodies = obj.get('bodies')
+        cta = obj.get('cta')
+        if not (isinstance(headings, list) and isinstance(bodies, list) and
+                len(headings) == len(bodies) == 5 and
+                all(isinstance(x, str) and x.strip() for x in headings + bodies) and
+                isinstance(cta, str) and cta.strip()):
+            raise ValueError('Naskah JSON wajib punya headings dan bodies berisi 5 kalimat serta cta.')
+        parsed = ([x.strip() for x in headings], [x.strip() for x in bodies], cta.strip())
+    else:
+        parsed = parse_script(text)
+    headings, bodies, cta = parsed
+    # Lapisan keamanan: gagal jelas jika parser teks lama menelan sintaks JSON mentah.
+    fragments = re.compile(r'\[\s*[\]\[,]|\]\s*[,}]|[{}]\s*[\"\']?(?:headings|bodies|cta)\b|\"(?:headings|bodies|cta)\"\s*:', re.I)
+    if any(fragments.search(str(x)) for x in [*headings, *bodies, cta]):
+        raise ValueError('Naskah mengandung fragmen JSON; video dibatalkan agar simbol tidak muncul di layar dan narasi.')
+    if len(headings) != 5 or len(bodies) != 5:
+        raise ValueError('Naskah harus menghasilkan tepat lima adegan.')
+    return headings, bodies, cta
+
+
+_SPEAK_NUMBERS = {'1':'Pertama', '2':'Kedua', '3':'Ketiga', '4':'Keempat', '5':'Kelima'}
+
+
+def spoken_scene(heading, body, cta=''):
+    """Ubah judul bernomor dan harga ke ucapan manusiawi tanpa mengubah teks layar."""
+    title = str(heading or '').strip()
+    match = re.match(r'^([1-5])\s*[.)-]\s*(.*)$', title)
+    if match:
+        title = _SPEAK_NUMBERS[match.group(1)] + ', ' + match.group(2)
+    parts = [title.rstrip(' .!?'), str(body).strip().rstrip(' .!?')]
+    if cta:
+        parts.append(str(cta).strip().rstrip(' .!?'))
+    spoken = '. '.join(x for x in parts if x) + '.'
+    spoken = re.sub(r'Rp\s*149\.000\b', 'seratus empat puluh sembilan ribu rupiah', spoken, flags=re.I)
+    return spoken
+
+
 def draw_motif(draw, kind, color, bg, n):
     """Simple, original vector visuals drawn on each slide (no external assets)."""
     cx,cy=581,177
@@ -411,7 +464,7 @@ def create():
     raw = os.environ.get('VIDEO_NASKAH', '').strip()
     if not raw:
         raise ValueError('Naskah tidak boleh kosong')
-    headings, bodies, cta = parse_script(raw)
+    headings, bodies, cta = parse_studio_script(raw)
     if os.environ.get('VIDEO_CTA', '').strip():
         cta = clip_words(os.environ['VIDEO_CTA'], 56)
     seedstr = os.environ.get('GITHUB_RUN_ID', '') or str(os.environ.get('VIDEO_SEED', ''))
@@ -454,19 +507,18 @@ def create():
         cuts = [4.0 * n for n in range(5)]
         speech_duration = 20.0
     else:
-        sentences = [narration_for_scene(h, b, cta if i == 4 else '')
+        sentences = [spoken_scene(h, b, cta if i == 4 else '')
                      for i, (h, b) in enumerate(zip(headings, bodies))]
         narration = ' '.join(sentences)
         if voice == 'natural':
+            # GAGAL TERBUKA, jangan diam-diam mengganti ke Piper yang terdengar robot.
             try:
                 from natural_voice import natural_audio
                 speech_duration = natural_audio(narration, audio)
             except Exception as e:
-                # Jangan diam-diam mengaku pakai model natural jika gagal.
-                voice_fallback_reason = f'{type(e).__name__}: {str(e)[:180]}'
-                print('PERINGATAN: Pocket TTS belum berhasil; fallback ke Piper tegas:',voice_fallback_reason,flush=True)
-                actual_voice = 'piper'
-                speech_duration = piper_audio(narration, audio)
+                raise RuntimeError('SUARA NATURAL GAGAL: Pocket TTS Indonesia belum dapat menghasilkan suara. '
+                                   'MP4 tidak dikirim agar tidak mengganti narator dengan suara robot. '
+                                   'Lihat detail error Pocket TTS di log GitHub: ' + str(e)[:350]) from e
         else:
             speech_duration = piper_audio(narration, audio)
         cuts = approximate_cuts(sentences, speech_duration)
@@ -537,7 +589,7 @@ def create():
     has_audio = bool(verify.stdout.strip())
     if voice != 'mati' and not has_audio:
         raise RuntimeError('MP4 kehilangan audio. Tidak dikirim ke Telegram.')
-    info = {'version':'3.5','style':style,'scene_styles':[x['style'] for x in art],
+    info = {'version':'JSON-sanitized-1','style':style,'scene_styles':[x['style'] for x in art],
             'visuals':art,'voice':actual_voice,'voice_requested':voice,
             'voice_fallback_reason':voice_fallback_reason,
             'voice_style':'tegas dan jelas (Piper) / natural beta (Pocket, referensi CC0)',
