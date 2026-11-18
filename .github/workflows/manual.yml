@@ -1,4 +1,4 @@
-name: Keisha - Studio MP4 V3.4 Musik Adaptif
+name: Keisha - Studio MP4 V3.5 Suara Tegas + Anti Spam
 
 on:
   workflow_dispatch:
@@ -13,7 +13,7 @@ on:
         required: false
         type: string
       voice:
-        description: 'piper (gratis offline) atau mati; perintah natural/sintetis/nilasari lama otomatis memakai Piper'
+        description: 'piper/tegas (stabil), natural (Pocket TTS gratis beta), mati'
         default: 'piper'
         required: false
         type: string
@@ -41,7 +41,7 @@ concurrency:
 jobs:
   buat-video:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - name: Ambil kode
         uses: actions/checkout@v4
@@ -71,6 +71,21 @@ jobs:
           python -m pip install -r Keisha_Video_Cloud_Starter_v1/requirements.txt
           python -m pip install "piper-tts>=1.2,<2" "numpy>=1.24,<3"
 
+      - name: Opsional Pocket TTS Indonesia (natural beta, tidak berbayar)
+        if: ${{ inputs.voice == 'natural' || inputs.voice == 'manusia' || inputs.voice == 'pocket' }}
+        continue-on-error: true
+        run: |
+          # Gunakan CPU-only PyTorch agar tidak mengunduh paket CUDA yang tidak diperlukan.
+          python -m pip install --upgrade --index-url https://download.pytorch.org/whl/cpu torch
+          python -m pip install "pocket-tts==3.1.0"
+
+      - name: Cache model Pocket TTS Indonesia
+        if: ${{ inputs.voice == 'natural' || inputs.voice == 'manusia' || inputs.voice == 'pocket' }}
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface/hub
+          key: pocket-id-6l-v35
+
       - name: Cache model Piper Indonesia
         uses: actions/cache@v4
         with:
@@ -82,14 +97,14 @@ jobs:
         working-directory: Keisha_Video_Cloud_Starter_v1
         run: python -m unittest discover -s tests -v
 
-      - name: Produksi desain, suara lembut dan musik latar original
+      - name: Produksi desain, suara tegas atau natural beta dan musik latar original
         working-directory: Keisha_Video_Cloud_Starter_v1
         env:
           VIDEO_NASKAH: ${{ inputs.naskah }}
           VIDEO_STYLE: ${{ inputs.style }}
           VIDEO_VOICE: ${{ inputs.voice }}
           VIDEO_MUSIC: ${{ inputs.music }}
-          VIDEO_MUSIC_VOLUME: "0.20"
+          VIDEO_MUSIC_VOLUME: "0.14"
           VIDEO_CTA: ${{ inputs.cta }}
           VIDEO_VISUALS: ${{ inputs.visuals }}
         run: python render_studio.py
@@ -139,12 +154,18 @@ jobs:
           root=Path('Keisha_Video_Cloud_Starter_v1/hasil')
           path=root/'keisha-rcd-video.mp4'
           data=json.loads((root/'metadata.json').read_text(encoding='utf-8'))
-          desc={'piper':'Piper Indonesia (offline, tanpa kredit TTS)','mati':'tanpa suara'}[data['voice']]
-          caption=(f"🎬 Keisha Studio v3.4 MUSIK | MP4 berhasil\n"
+          desc={'piper':'Piper tegas (offline gratis)','natural':'Pocket TTS natural beta (offline gratis)','mati':'tanpa suara'}[data['voice']]
+          fallback_notice = ('ℹ️ Natural beta belum tersedia, digunakan Piper tegas.\n'
+                             if data.get('voice_fallback_reason') else '')
+          credit_notice = ('🎤 Model: Pocket TTS Indonesian oleh anak10thn (CC BY 4.0).\n'
+                           if data.get('voice') == 'natural' else '')
+          caption=(f"🎬 Keisha Studio v3.5 ANTI-SPAM | MP4 berhasil\n"
                    f"Desain per slide: {', '.join(data['scene_styles'])}\n"
                    f"Audio terverifikasi: {'ya' if data['audio_verified'] else 'tidak'} | {desc}\n"
-                   f"🎵 Musik original: {data.get('music_mood', 'mati')} | lembut di belakang narasi\n"
+                   f"🎵 Musik original: {data.get('music_mood', 'mati')} | volume di bawah narasi\n"
                    f"Durasi: {data['duration']} detik\n"
+                   f"{fallback_notice}"
+                   f"{credit_notice}"
                    f"STATUS: DRAF, BELUM DIPOSTING.\n"
                    f"Periksa isi, narasi, dan caption sebelum publikasi.")
           boundary='----Keisha'+secrets.token_hex(12)
