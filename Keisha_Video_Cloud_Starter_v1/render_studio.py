@@ -1,5 +1,5 @@
-"""Ruang Cuan Digital | Keisha Studio v3.3, suara Indonesia offline Piper TTS.
-Lima gaya visual dengan satu jalur narasi kontinu, tanpa API suara berbayar.
+"""Ruang Cuan Digital | Keisha Studio v3.4.
+Narasi Piper gratis + musik instrumental ORIGINAL, adaptif, pelan dan ducking.
 """
 from __future__ import annotations
 
@@ -17,6 +17,7 @@ import urllib.request
 
 from PIL import Image, ImageDraw, ImageFont
 from render_custom import parse_script, clip_words
+from music_engine import choose_mood, generate_music
 
 ROOT = Path(__file__).resolve().parent
 OUT = (ROOT / 'hasil').resolve()
@@ -373,9 +374,9 @@ def piper_audio(narration, output):
     try:
         run = subprocess.run([
             'piper', '--model', str(model), '--output_file', str(output),
-            '--length_scale', '1.06',  # Slightly calmer Indonesian cadence.
-            '--noise_scale', '0.58', '--noise_w', '0.65',
-            '--sentence_silence', '0.18',
+            '--length_scale', '1.10',  # Gaya B: tempo sedikit lebih lembut (bukan Nilasari asli).
+            '--noise_scale', '0.48', '--noise_w', '0.55',
+            '--sentence_silence', '0.14',
         ], input=narration + '\n', text=True, capture_output=True, timeout=210)
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise RuntimeError('Piper tidak selesai: ' + type(exc).__name__) from exc
@@ -427,6 +428,12 @@ def create():
     if voice not in ('piper', 'mati'):
         raise ValueError('Suara tersedia: piper (gratis) atau mati')
 
+    music_request = os.environ.get('VIDEO_MUSIC', 'otomatis').strip().lower()
+    music_mood = choose_mood(raw, music_request)
+    music_volume = float(os.environ.get('VIDEO_MUSIC_VOLUME', '0.20'))
+    if not (0.05 <= music_volume <= 0.30):
+        raise ValueError('VIDEO_MUSIC_VOLUME harus antara 0.05 dan 0.30')
+
     art = storyboard(raw, style, seed)
     OUT.mkdir(parents=True, exist_ok=True)
     clips = []
@@ -461,14 +468,48 @@ def create():
        '-t',f'{video_length:.3f}','-an','-c:v','libx264','-threads','1',
        '-preset','ultrafast','-crf','27',silent,timeout=240)
     video = OUT / 'keisha-rcd-video.mp4'
-    if voice == 'mati':
+    soundtrack_path = OUT / 'keisha-musik-original.wav'
+    music_info = None
+    if music_mood != 'mati':
+        music_info = generate_music(soundtrack_path, video_length, music_mood,
+                                    seed_text=raw)
+
+    if voice == 'mati' and music_mood == 'mati':
         shutil.copyfile(silent, video)
-    else:
-        # Encode one AAC track from a continuous MP3. No independent WAV stitching.
+    elif voice == 'mati':
+        # Music-only video is allowed, but metadata clearly states no narration.
+        ff('-i',silent,'-i',soundtrack_path,'-map','0:v:0', '-map','1:a:0',
+           '-c:v','copy','-c:a','aac','-b:a','160k',
+           '-af',f'volume={music_volume},alimiter=limit=0.88',
+           '-t',f'{video_length:.3f}','-movflags','+faststart',video)
+    elif music_mood == 'mati':
         ff('-i',silent,'-i',audio,'-map','0:v:0','-map','1:a:0',
            '-c:v','copy','-c:a','aac','-b:a','160k','-ar','44100',
            '-af','highpass=f=70,lowpass=f=10500,acompressor=threshold=-20dB:ratio=2:attack=30:release=300,loudnorm=I=-17:TP=-2:LRA=10,apad=pad_dur=0.40',
            '-t',f'{video_length:.3f}', '-movflags','+faststart',video)
+    else:
+        # Keep the music low under the narrator. Sidechain compression reduces the
+        # original instrumental track whenever the narrator speaks; no abrupt cuts.
+        fadeout_start=max(0.0,video_length-.85)
+        filter_graph=(
+            '[1:a]highpass=f=70,lowpass=f=10500,'
+            'acompressor=threshold=-20dB:ratio=2:attack=30:release=300,'
+            'loudnorm=I=-17:TP=-2:LRA=10,'
+            f'apad=pad_dur=0.40,atrim=duration={video_length:.4f},'
+            'aresample=44100,aformat=channel_layouts=stereo,asplit=2[voice][trigger];'
+            f'[2:a]aresample=44100,aformat=channel_layouts=stereo,'
+            f'atrim=duration={video_length:.4f},'
+            f'volume={music_volume:.3f},afade=t=in:st=0:d=0.40,'
+            f'afade=t=out:st={fadeout_start:.4f}:d=0.85[bed];'
+            '[bed][trigger]sidechaincompress=threshold=0.042:ratio=4.5:'
+            'attack=40:release=400[ducked];'
+            '[voice][ducked]amix=inputs=2:duration=longest:'
+            'dropout_transition=0:normalize=0,alimiter=limit=0.88[finalaudio]'
+        )
+        ff('-i',silent,'-i',audio,'-i',soundtrack_path,
+           '-filter_complex',filter_graph,'-map','0:v:0','-map','[finalaudio]',
+           '-c:v','copy','-c:a','aac','-b:a','160k', '-ar','44100',
+           '-t',f'{video_length:.3f}','-movflags','+faststart',video,timeout=230)
     if not video.is_file() or video.stat().st_size < 5000:
         raise RuntimeError('MP4 hasil rendering tidak valid')
     verify = subprocess.run(['ffprobe','-v','error','-select_streams','a:0',
@@ -478,8 +519,13 @@ def create():
     has_audio = bool(verify.stdout.strip())
     if voice != 'mati' and not has_audio:
         raise RuntimeError('MP4 kehilangan audio. Tidak dikirim ke Telegram.')
-    info = {'version':'3.3','style':style,'scene_styles':[x['style'] for x in art],
-            'visuals':art,'voice':voice,'audio_verified':has_audio,
+    info = {'version':'3.4','style':style,'scene_styles':[x['style'] for x in art],
+            'visuals':art,'voice':voice,'voice_style':'B-lembut (Piper offline, B referensi karakter)',
+            'audio_verified':has_audio,'narration_verified':has_audio and voice!='mati',
+            'music_enabled':music_mood!='mati','music_mood':music_mood,
+            'music_volume':music_volume if music_info else 0,
+            'music_source':'original_programmatic_instrumental' if music_info else None,
+            'music_info':music_info,
             'duration':round(duration(video),1),
             'headings':headings,'bodies':bodies,'cta':cta,
             'narration_continuous':voice!='mati',
@@ -490,7 +536,7 @@ def create():
             'tts_cloud_requests':0}
     (OUT/'metadata.json').write_text(json.dumps(info, ensure_ascii=False, indent=2),
                                     encoding='utf-8')
-    print('KEISHA STUDIO V3.3 GRATIS:', video, '| voice:', voice,
+    print('KEISHA STUDIO V3.4 MUSIK ORIGINAL GRATIS:', video, '| voice:', voice,
           '| one continuous audio:', info['narration_continuous'],
           '| audio verified:', has_audio, '| duration:', info['duration'])
 
