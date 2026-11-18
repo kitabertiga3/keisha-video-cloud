@@ -1,9 +1,11 @@
 """Ruang Cuan Digital | Keisha Studio v3.1.
-Original text-vector compositions, narrated slide videos. Dependencies: Pillow + ffmpeg + espeak-ng.
-Optional commercially licensed ElevenLabs voice via secrets; never use Free for affiliate content.
+Original text-vector compositions with synchronized continuous ElevenLabs Nilasari narration.
+Requires licensed ElevenLabs API for promotional/commercial use. No robotic voice fallback.
 """
 from __future__ import annotations
 
+import base64
+import difflib
 import hashlib
 import json
 import math
@@ -312,105 +314,193 @@ def make_card(path, i, heading, body, cta, style, seed, motif="ide", accent_hex=
     im.save(path,optimize=True)
 
 
-def to_audio(text, dest, voice):
-    text = re.sub(r'\s+', ' ', text).strip()
-    if voice=='mati':
-        return False
-    api = os.environ.get('ELEVENLABS_API_KEY','').strip()
-    voice_id = os.environ.get('ELEVENLABS_VOICE_ID','').strip()
-    commercial_ok = os.environ.get('ELEVENLABS_COMMERCIAL_OK','').lower() in ('true','1','yes')
-    use_eleven = (voice=='natural') or (voice=='otomatis' and bool(api and voice_id and commercial_ok))
-    if use_eleven:
-        if not api or not voice_id or not commercial_ok:
-            raise RuntimeError('Suara natural membutuhkan ELEVENLABS_API_KEY, ELEVENLABS_VOICE_ID, dan ELEVENLABS_COMMERCIAL_OK=true pada paket komersial berlisensi.')
-        payload=json.dumps({'text':text,'model_id':'eleven_multilingual_v2','voice_settings':{'stability':0.55,'similarity_boost':0.8}},ensure_ascii=False).encode('utf-8')
-        req=urllib.request.Request(f'https://api.elevenlabs.io/v1/text-to-speech/{voice_id}?output_format=mp3_44100_128',
-                data=payload,headers={'xi-api-key':api,'Content-Type':'application/json','Accept':'audio/mpeg'},method='POST')
-        try:
-            with urllib.request.urlopen(req,timeout=75) as res:
-                audio=res.read(8_000_000)
-            if len(audio)<1000: raise RuntimeError('Audio terlalu pendek')
-            mp3=dest.with_suffix('.mp3')
-            mp3.write_bytes(audio)
-            ff('-i',mp3,'-ar','22050','-ac','1','-c:a','pcm_s16le',dest)
-        except urllib.error.HTTPError as exc:
-            raise RuntimeError(f'ElevenLabs menolak permintaan: HTTP {exc.code}. Tidak memakai suara tanpa izin.') from None
-        return 'natural'
-    speaker = shutil.which('espeak-ng') or shutil.which('espeak')
-    if not speaker:
-        raise RuntimeError('espeak-ng belum terpasang: tidak boleh mengirim video tanpa suara secara diam-diam.')
-    subprocess.run([speaker,'-v','id+f3','-s','169','-a','163','-p','53','-w',str(dest),text],check=True,timeout=60,stdout=subprocess.DEVNULL)
-    return 'sintetis'
+NILASARI_VOICE_ID = 'NPDHDOOQCSyifTJZOe6J'  # Verified ElevenLabs Voice Library: Nilasari
+
+
+def narration_for_scene(heading, body, cta=''):
+    """Narration speaks exactly the on-screen heading, body and optional CTA."""
+    parts = [heading.rstrip(' .!?'), body.rstrip(' .!?')]
+    if cta:
+        parts.append(cta.rstrip(' .!?'))
+    return '. '.join(x for x in parts if x) + '.'
+
+
+def _align_index(original, produced, pos):
+    """Translate a narration character index to ElevenLabs alignment characters."""
+    if original == produced:
+        return pos
+    blocks = difflib.SequenceMatcher(a=original, b=produced, autojunk=False).get_matching_blocks()
+    for block in blocks:
+        if block.a <= pos < block.a + block.size:
+            return block.b + pos - block.a
+        if block.a > pos:
+            break
+    earlier = [b for b in blocks if b.a + b.size <= pos]
+    return min(len(produced) - 1, (earlier[-1].b + earlier[-1].size) if earlier else 0)
+
+
+def nilasari_audio_with_timing(narration, scene_offsets, output):
+    """Generate ONE continuous voiceover; use ElevenLabs character timing for cuts.
+
+    No per-slide TTS splicing, no eSpeak fallback. This preserves prosody and
+    fixes staccato/awkward breaks caused by joining five independent speech clips.
+    """
+    api = os.environ.get('ELEVENLABS_API_KEY', '').strip()
+    commercial_ok = os.environ.get('ELEVENLABS_COMMERCIAL_OK', '').lower() in ('true', '1', 'yes')
+    if not api or not commercial_ok:
+        raise RuntimeError(
+            'Suara Nilasari BELUM AKTIF. Tambahkan GitHub Actions secret '
+            'ELEVENLABS_API_KEY dari akun ElevenLabs berlisensi komersial dan '
+            'ELEVENLABS_COMMERCIAL_OK=true. Video dibatalkan, tanpa fallback robot.'
+        )
+    payload = json.dumps({
+        'text': narration,
+        'model_id': 'eleven_multilingual_v2',
+        'voice_settings': {'stability': 0.5, 'similarity_boost': 0.8, 'style': 0.12,
+                           'use_speaker_boost': True},
+    }, ensure_ascii=False).encode('utf-8')
+    url = (f'https://api.elevenlabs.io/v1/text-to-speech/{NILASARI_VOICE_ID}'
+           '/with-timestamps?output_format=mp3_44100_128')
+    request = urllib.request.Request(url, data=payload, method='POST', headers={
+        'xi-api-key': api, 'Content-Type': 'application/json', 'Accept': 'application/json'})
+    try:
+        with urllib.request.urlopen(request, timeout=130) as response:
+            content = response.read(15_000_000)
+        data = json.loads(content)
+    except urllib.error.HTTPError as error:
+        if error.code in (401, 403):
+            message = 'API key tidak valid atau tidak berhak mengakses suara Nilasari.'
+        elif error.code in (400, 404, 422):
+            message = 'Voice Nilasari belum tersedia di akun. Tambahkan Nilasari dari ElevenLabs Voice Library.'
+        elif error.code == 429:
+            message = 'Kuota atau batas permintaan ElevenLabs habis.'
+        else:
+            message = f'ElevenLabs HTTP {error.code}.'
+        raise RuntimeError(message + ' Video tidak dibuat dengan suara robot.') from None
+    except (OSError, ValueError, TimeoutError) as error:
+        raise RuntimeError(f'Gagal meminta suara Nilasari: {type(error).__name__}. '
+                           'Periksa koneksi ElevenLabs; video belum dibuat.') from None
+    try:
+        mp3 = base64.b64decode(data['audio_base64'], validate=True)
+        chars = data['alignment']['characters']
+        times = data['alignment']['character_start_times_seconds']
+        ends = data['alignment']['character_end_times_seconds']
+        if len(chars) < 10 or len(chars) != len(times) or len(chars) != len(ends):
+            raise ValueError('alignment tidak valid')
+        returned_text = ''.join(chars)
+        similarity = difflib.SequenceMatcher(a=narration, b=returned_text,
+                                               autojunk=False).ratio()
+        if similarity < 0.75:
+            raise ValueError('naskah dan timing tidak sesuai')
+        output.write_bytes(mp3)
+        if len(mp3) < 1000:
+            raise ValueError('file audio terlalu kecil')
+        audio_length = duration(output)
+        if audio_length < 1:
+            raise ValueError('durasi audio tidak valid')
+        cuts = [0.0]
+        for pos in scene_offsets[1:]:
+            idx = _align_index(narration, returned_text, pos)
+            cuts.append(float(times[max(0, min(len(times)-1, idx))]))
+        if len(cuts) != 5 or any(b-a < .4 for a,b in zip(cuts, cuts[1:])):
+            raise ValueError('batas slide tidak valid')
+        if cuts[-1] >= audio_length - .4:
+            raise ValueError('audio tidak cocok dengan lima adegan')
+        return cuts, audio_length
+    except (ValueError, KeyError, TypeError, UnicodeError) as error:
+        output.unlink(missing_ok=True)
+        raise RuntimeError(f'Suara Nilasari diterima tapi timing bermasalah: {error}. '
+                           'Video dibatalkan agar tidak salah sinkron.') from None
 
 
 def create():
-    raw = os.environ.get('VIDEO_NASKAH','').strip()
-    if not raw: raise ValueError('Naskah tidak boleh kosong')
-    headings,bodies,cta = parse_script(raw)
-    if os.environ.get('VIDEO_CTA','').strip():
-        cta=clip_words(os.environ['VIDEO_CTA'],56)
-    seedstr = os.environ.get('GITHUB_RUN_ID','') or str(os.environ.get('VIDEO_SEED',''))
-    if not seedstr: seedstr = hashlib.sha256(raw.encode('utf-8')).hexdigest()[:12]
-    seed = int(hashlib.sha256(seedstr.encode('utf-8')).hexdigest()[:12],16)
-    style = os.environ.get('VIDEO_STYLE','otomatis').lower().strip()
-    style = 'otomatis' if style in ('otomatis','auto','') else style
-    if style not in STYLES + ('otomatis',): raise ValueError('Gaya tersedia: '+', '.join(STYLES))
-    voice=os.environ.get('VIDEO_VOICE','otomatis').lower().strip()
-    if voice not in ('otomatis','sintetis','natural','mati'):
-        raise ValueError('Suara: otomatis, sintetis, natural, mati')
+    raw = os.environ.get('VIDEO_NASKAH', '').strip()
+    if not raw:
+        raise ValueError('Naskah tidak boleh kosong')
+    headings, bodies, cta = parse_script(raw)
+    if os.environ.get('VIDEO_CTA', '').strip():
+        cta = clip_words(os.environ['VIDEO_CTA'], 56)
+    seedstr = os.environ.get('GITHUB_RUN_ID', '') or str(os.environ.get('VIDEO_SEED', ''))
+    if not seedstr:
+        seedstr = hashlib.sha256(raw.encode('utf-8')).hexdigest()[:12]
+    seed = int(hashlib.sha256(seedstr.encode('utf-8')).hexdigest()[:12], 16)
+    style = os.environ.get('VIDEO_STYLE', 'otomatis').lower().strip()
+    style = 'otomatis' if style in ('otomatis', 'auto', '') else style
+    if style not in STYLES + ('otomatis',):
+        raise ValueError('Gaya tersedia: ' + ', '.join(STYLES))
+    voice = os.environ.get('VIDEO_VOICE', 'nilasari').lower().strip()
+    if voice in ('otomatis', 'natural', 'sintetis', ''):
+        voice = 'nilasari'  # Old commands never silently select the robotic voice.
+    if voice not in ('nilasari', 'mati'):
+        raise ValueError('Suara tersedia: nilasari atau mati')
+
     art = storyboard(raw, style, seed)
-    OUT.mkdir(parents=True,exist_ok=True)
-    clips=[]
-    audio_kind='mati' if voice=='mati' else 'sintetis'
-    for i,(head,body) in enumerate(zip(headings,bodies),1):
-        card=OUT/f'studio-slide-{i}.png'
-        make_card(card,i,head,body,cta,art[i-1]['style'],seed,art[i-1]['motif'],art[i-1]['accent'])
-        if voice=='mati':
-            clips.append((card,None,4.0))
-        else:
-            wav=OUT/f'slide-{i}.wav'
-            narration = head.rstrip(' .!?') + '. ' + body.rstrip(' .!?') + ('. ' + cta if i == 5 else '')
-            used=to_audio(narration,wav,voice)
-            if used=='natural': audio_kind='natural'
-            padded=OUT/f'slide-{i}-padded.wav'
-            ff('-i',wav,'-af','apad=pad_dur=0.52','-ar','22050','-ac','1','-c:a','pcm_s16le',padded)
-            clips.append((card,padded,duration(padded)))
-    timeline=OUT/'studio-frames.ffconcat'
-    with timeline.open('w',encoding='utf-8') as f:
-        f.write('ffconcat version 1.0\n')
-        for p,_,t in clips:
-            f.write(f"file '{p.name}'\nduration {t:.6f}\n")
-        f.write(f"file '{clips[-1][0].name}'\n")
-    runtime=sum(t for _,_,t in clips)
-    silent=OUT/'studio-silent.mp4'
-    ff('-safe','0','-f','concat','-i',timeline,'-vf','fps=15,format=yuv420p','-t',f'{runtime:.3f}',
-       '-an','-c:v','libx264','-threads','1','-preset','ultrafast','-crf','27',silent,timeout=240)
-    video=OUT/'keisha-rcd-video.mp4'
-    if voice=='mati':
-        shutil.copyfile(silent,video)
+    OUT.mkdir(parents=True, exist_ok=True)
+    clips = []
+    for i, (head, body) in enumerate(zip(headings, bodies), 1):
+        card = OUT / f'studio-slide-{i}.png'
+        make_card(card, i, head, body, cta, art[i-1]['style'], seed,
+                  art[i-1]['motif'], art[i-1]['accent'])
+        clips.append(card)
+
+    mp3 = OUT / 'keisha-nilasari.mp3'
+    if voice == 'mati':
+        cuts = [4.0 * n for n in range(5)]
+        speech_duration = 20.0
     else:
-        playlist=OUT/'studio-voice.ffconcat'
-        with playlist.open('w',encoding='utf-8') as f:
-            f.write('ffconcat version 1.0\n')
-            for _,w,_ in clips:
-                f.write(f"file '{w.name}'\n")
-        merged=OUT/'studio-voice.m4a'
-        ff('-safe','0','-f','concat','-i',playlist,'-c:a','aac','-b:a','112k',merged)
-        ff('-i',silent,'-i',merged,'-map','0:v:0','-map','1:a:0','-c:v','copy','-c:a','copy','-movflags','+faststart','-shortest',video)
+        sentences = [narration_for_scene(h, b, cta if i == 4 else '')
+                     for i, (h, b) in enumerate(zip(headings, bodies))]
+        narration = '\n\n'.join(sentences)
+        offsets = []
+        pos = 0
+        for i, sentence in enumerate(sentences):
+            offsets.append(pos)
+            pos += len(sentence) + (2 if i != 4 else 0)
+        cuts, speech_duration = nilasari_audio_with_timing(narration, offsets, mp3)
+
+    video_length = speech_duration + (0.40 if voice != 'mati' else 0)
+    boundaries = cuts + [video_length]
+    durations = [b-a for a,b in zip(boundaries, boundaries[1:])]
+    timeline = OUT / 'studio-frames.ffconcat'
+    with timeline.open('w', encoding='utf-8') as handle:
+        handle.write('ffconcat version 1.0\n')
+        for image_path, seconds in zip(clips, durations):
+            handle.write(f"file '{image_path.name}'\nduration {seconds:.6f}\n")
+        handle.write(f"file '{clips[-1].name}'\n")
+    silent = OUT / 'studio-silent.mp4'
+    ff('-safe','0','-f','concat','-i',timeline, '-vf','fps=15,format=yuv420p',
+       '-t',f'{video_length:.3f}','-an','-c:v','libx264','-threads','1',
+       '-preset','ultrafast','-crf','27',silent,timeout=240)
+    video = OUT / 'keisha-rcd-video.mp4'
+    if voice == 'mati':
+        shutil.copyfile(silent, video)
+    else:
+        # Encode one AAC track from a continuous MP3. No independent WAV stitching.
+        ff('-i',silent,'-i',mp3,'-map','0:v:0','-map','1:a:0',
+           '-c:v','copy','-c:a','aac','-b:a','160k','-ar','44100',
+           '-af','apad=pad_dur=0.40','-t',f'{video_length:.3f}',
+           '-movflags','+faststart',video)
     if not video.is_file() or video.stat().st_size < 5000:
         raise RuntimeError('MP4 hasil rendering tidak valid')
-    # No silent successes: if narration was requested, the MP4 MUST contain audio.
-    verify=subprocess.run(['ffprobe','-v','error','-select_streams','a:0',
-            '-show_entries','stream=codec_name','-of','default=noprint_wrappers=1:nokey=1',str(video)],
+    verify = subprocess.run(['ffprobe','-v','error','-select_streams','a:0',
+            '-show_entries','stream=codec_name','-of',
+            'default=noprint_wrappers=1:nokey=1', str(video)],
             check=True,capture_output=True,text=True,timeout=15)
-    has_audio=bool(verify.stdout.strip())
-    if voice!='mati' and not has_audio:
-        raise RuntimeError('Video terbuat, tetapi audio hilang. MP4 tidak boleh dikirim tanpa suara.')
-    info={'style':style,'scene_styles':[x['style'] for x in art],'visuals':art,
-          'voice':audio_kind,'audio_verified':has_audio,'duration':round(duration(video),1),
-          'headings':headings,'bodies':bodies,'cta':cta}
-    (OUT/'metadata.json').write_text(json.dumps(info,ensure_ascii=False,indent=2),encoding='utf-8')
-    print('KEISHA STUDIO V3.1:',video,'gaya per slide:',info['scene_styles'],'suara:',audio_kind,'audio verified:',has_audio,'durasi:',info['duration'])
+    has_audio = bool(verify.stdout.strip())
+    if voice != 'mati' and not has_audio:
+        raise RuntimeError('MP4 kehilangan audio. Tidak dikirim ke Telegram.')
+    info = {'version':'3.2','style':style,'scene_styles':[x['style'] for x in art],
+            'visuals':art,'voice':voice,'audio_verified':has_audio,
+            'duration':round(duration(video),1),
+            'headings':headings,'bodies':bodies,'cta':cta,
+            'narration_continuous':voice!='mati',
+            'scene_start_seconds':[round(v,3) for v in cuts],
+            'voice_id':NILASARI_VOICE_ID if voice!='mati' else None}
+    (OUT/'metadata.json').write_text(json.dumps(info, ensure_ascii=False, indent=2),
+                                    encoding='utf-8')
+    print('KEISHA STUDIO V3.2:', video, '| voice:', voice,
+          '| synchronized:', info['narration_continuous'],
+          '| audio verified:', has_audio, '| duration:', info['duration'])
 
 
 if __name__=='__main__':
