@@ -1,11 +1,25 @@
-name: Keisha - Buat MP4
+name: Keisha - Studio MP4 V3.1
 
 on:
   workflow_dispatch:
     inputs:
       naskah:
-        description: 'Topik atau naskah baru Keisha (wajib, tidak boleh kosong)'
+        description: 'Topik / naskah Fajar atau Nadia (wajib)'
         required: true
+        type: string
+      style:
+        description: 'otomatis, majalah, neon, poster, kartu, minimal, diagonal'
+        default: 'otomatis'
+        required: false
+        type: string
+      voice:
+        description: 'otomatis (suara gratis), sintetis, natural (butuh lisensi), mati'
+        default: 'otomatis'
+        required: false
+        type: string
+      visuals:
+        description: 'Opsional: JSON storyboard Narska, disusun oleh Worker'
+        required: false
         type: string
       cta:
         description: 'CTA opsional'
@@ -15,12 +29,16 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: keisha-studio-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   buat-video:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - name: Ambil kode Keisha
+      - name: Ambil kode
         uses: actions/checkout@v4
 
       - name: Siapkan Python
@@ -28,87 +46,97 @@ jobs:
         with:
           python-version: '3.13'
 
-      - name: Pasang FFmpeg dan font
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg fonts-dejavu-core
+      - name: FFmpeg, font, dan suara gratis Indonesia
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg fonts-dejavu-core espeak-ng
 
-      - name: Pasang Python Pillow
+      - name: Pillow
         run: python -m pip install -r Keisha_Video_Cloud_Starter_v1/requirements.txt
 
-      - name: Periksa program
+      - name: Uji program Keisha lama
         working-directory: Keisha_Video_Cloud_Starter_v1
         run: python -m unittest discover -s tests -v
 
-      - name: Buat video baru sesuai naskah (20 detik)
+      - name: Produksi desain beragam + narasi
         working-directory: Keisha_Video_Cloud_Starter_v1
         env:
           VIDEO_NASKAH: ${{ inputs.naskah }}
+          VIDEO_STYLE: ${{ inputs.style }}
+          VIDEO_VOICE: ${{ inputs.voice }}
           VIDEO_CTA: ${{ inputs.cta }}
-        run: python render_custom.py
+          VIDEO_VISUALS: ${{ inputs.visuals }}
+          ELEVENLABS_API_KEY: ${{ secrets.ELEVENLABS_API_KEY }}
+          ELEVENLABS_VOICE_ID: ${{ secrets.ELEVENLABS_VOICE_ID }}
+          ELEVENLABS_COMMERCIAL_OK: ${{ secrets.ELEVENLABS_COMMERCIAL_OK }}
+        run: python render_studio.py
 
-      - name: Simpan video untuk diunduh
+      - name: Pastikan MP4 benar-benar memiliki audio jika suara diminta
+        working-directory: Keisha_Video_Cloud_Starter_v1
+        env:
+          VIDEO_VOICE: ${{ inputs.voice }}
+        run: |
+          python - <<'PYVERIFY'
+          import json, pathlib
+          p=pathlib.Path('hasil/metadata.json')
+          info=json.loads(p.read_text(encoding='utf-8'))
+          if (info.get('voice') != 'mati') and not info.get('audio_verified'):
+              raise SystemExit('GAGAL: Narasi hilang, MP4 tidak dikirim ke Telegram')
+          print('Audio OK:', info.get('voice'), 'durasi:', info.get('duration'))
+          PYVERIFY
+
+      - name: Simpan MP4 dan data produksi
         uses: actions/upload-artifact@v4
         with:
-          name: Keisha-MP4-Ruang-Cuan
-          path: Keisha_Video_Cloud_Starter_v1/hasil/keisha-rcd-video.mp4
+          name: Keisha-MP4-Studio
+          path: |
+            Keisha_Video_Cloud_Starter_v1/hasil/keisha-rcd-video.mp4
+            Keisha_Video_Cloud_Starter_v1/hasil/metadata.json
           if-no-files-found: error
           retention-days: 7
 
-      - name: Kirim MP4 ke Telegram jika kredensial sudah ada
+      - name: Kirim hasil ke Telegram
         if: success()
         env:
           TG_BOT_TOKEN: ${{ secrets.TELEGRAM_KEISHA_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
           python - <<'PY'
-          import http.client
-          import json
-          import os
-          import secrets
+          import http.client, json, os, secrets
           from pathlib import Path
 
-          token = os.environ.get('TG_BOT_TOKEN', '').strip()
-          chat_id = os.environ.get('TG_CHAT_ID', '').strip()
-          if not token or not chat_id:
-              print('Telegram belum dikonfigurasi: MP4 tersedia di Artifacts GitHub.')
+          token=os.environ.get('TG_BOT_TOKEN','').strip()
+          chat=os.environ.get('TG_CHAT_ID','').strip()
+          if not token or not chat:
+              print('Telegram belum disetel. Unduh MP4 dari Artifacts.')
               raise SystemExit(0)
 
-          path = Path('Keisha_Video_Cloud_Starter_v1/hasil/keisha-rcd-video.mp4')
-          if not path.is_file():
-              raise RuntimeError('MP4 tidak ditemukan; notifikasi Telegram dibatalkan.')
-
-          boundary = 'keisha-' + secrets.token_hex(16)
-          caption = (
-              '🎬 Keisha | MP4 baru sesuai naskah berhasil dibuat.\n'
-              'Video faceless 20 detik, tanpa suara.\n'
-              'STATUS: DRAF, BELUM DIPOSTING.\n'
-              'Periksa isi, lisensi media, dan caption sebelum publikasi.'
-          )
-          fields = {'chat_id': chat_id, 'caption': caption, 'supports_streaming': 'true'}
-          parts = []
-          for name, value in fields.items():
-              parts.append(
-                  (f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"\r\n\r\n{value}\r\n').encode()
-              )
-          parts.append(
-              (f'--{boundary}\r\nContent-Disposition: form-data; name="video"; '
-               'filename="keisha-rcd-video.mp4"\r\nContent-Type: video/mp4\r\n\r\n').encode()
-          )
+          root=Path('Keisha_Video_Cloud_Starter_v1/hasil')
+          path=root/'keisha-rcd-video.mp4'
+          data=json.loads((root/'metadata.json').read_text(encoding='utf-8'))
+          desc={'sintetis':'suara Indonesia sintetis','natural':'suara natural berlisensi','mati':'tanpa suara'}[data['voice']]
+          caption=(f"🎬 Keisha Studio v3.1 | MP4 berhasil\n"
+                   f"Desain per slide: {', '.join(data['scene_styles'])}\n"
+                   f"Audio terverifikasi: {'ya' if data['audio_verified'] else 'tidak'} | {desc}\n"
+                   f"Durasi: {data['duration']} detik\n"
+                   f"STATUS: DRAF, BELUM DIPOSTING.\n"
+                   f"Periksa isi, narasi, dan caption sebelum publikasi.")
+          boundary='----Keisha'+secrets.token_hex(12)
+          parts=[]
+          def field(name,value):
+              parts.append((f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"\r\n\r\n{value}\r\n').encode('utf-8'))
+          field('chat_id',chat)
+          field('caption',caption)
+          field('supports_streaming','true')
+          parts.append((f'--{boundary}\r\nContent-Disposition: form-data; name="video"; filename="keisha-studio.mp4"\r\nContent-Type: video/mp4\r\n\r\n').encode('utf-8'))
           parts.append(path.read_bytes())
-          parts.append(f'\r\n--{boundary}--\r\n'.encode())
-          data = b''.join(parts)
-          try:
-              con = http.client.HTTPSConnection('api.telegram.org', timeout=90)
-              con.request(
-                  'POST', f'/bot{token}/sendVideo', body=data,
-                  headers={'Content-Type': f'multipart/form-data; boundary={boundary}',
-                           'Content-Length': str(len(data))}
-              )
-              response = con.getresponse()
-              result = json.loads(response.read().decode('utf-8'))
-              con.close()
-              if response.status != 200 or not result.get('ok'):
-                  raise RuntimeError('Telegram menolak kiriman')
-          except Exception:
-              raise RuntimeError('Gagal kirim Telegram. Periksa token, chat ID, dan izin bot tanpa membagikan rahasia.') from None
-          print('Video berdasarkan naskah terkirim ke Telegram. Belum diposting ke sosial media.')
+          parts.append(f'\r\n--{boundary}--\r\n'.encode('utf-8'))
+          body=b''.join(parts)
+          con=http.client.HTTPSConnection('api.telegram.org', timeout=90)
+          con.request('POST',f'/bot{token}/sendVideo',body=body,headers={'Content-Type':f'multipart/form-data; boundary={boundary}','Content-Length':str(len(body))})
+          r=con.getresponse()
+          status=r.status
+          answer=json.loads(r.read().decode('utf-8'))
+          con.close()
+          if status!=200 or not answer.get('ok'):
+              raise RuntimeError('Telegram gagal mengirim video; periksa token, ID grup, dan izin bot')
+          print('Telegram: MP4 baru terkirim sebagai draf.')
           PY
