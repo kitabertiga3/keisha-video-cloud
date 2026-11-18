@@ -1,4 +1,3 @@
-
 name: Keisha - Buat MP4
 
 on:
@@ -11,7 +10,6 @@ jobs:
   buat-video:
     runs-on: ubuntu-latest
     timeout-minutes: 15
-
     steps:
       - name: Ambil kode Keisha
         uses: actions/checkout@v4
@@ -24,33 +22,87 @@ jobs:
       - name: Pasang FFmpeg dan font
         run: sudo apt-get update && sudo apt-get install -y ffmpeg fonts-dejavu-core
 
-      - name: Pasang Pillow
+      - name: Pasang Python Pillow
         run: python -m pip install -r Keisha_Video_Cloud_Starter_v1/requirements.txt
 
-      - name: Tes program
+      - name: Periksa program
         working-directory: Keisha_Video_Cloud_Starter_v1
         run: python -m unittest discover -s tests -v
 
-      - name: Buat MP4
+      - name: Buat video MP4 20 detik
         working-directory: Keisha_Video_Cloud_Starter_v1
         run: |
           python - <<'PY'
           from server import DEFAULT_HEADINGS, DEFAULT_BODIES, DEFAULT_CTA
           from video_engine import build_video
-
-          video = build_video(
-              'hasil',
-              DEFAULT_HEADINGS,
-              DEFAULT_BODIES,
-              DEFAULT_CTA
-          )
-          print('MP4 berhasil:', video)
+          p = build_video('hasil', DEFAULT_HEADINGS, DEFAULT_BODIES, DEFAULT_CTA)
+          print('MP4 dibuat:', p)
           PY
 
-      - name: Simpan MP4
+      - name: Simpan video untuk diunduh
         uses: actions/upload-artifact@v4
         with:
           name: Keisha-MP4-Ruang-Cuan
           path: Keisha_Video_Cloud_Starter_v1/hasil/keisha-rcd-video.mp4
           if-no-files-found: error
           retention-days: 7
+
+      - name: Kirim MP4 ke Telegram jika kredensial sudah ada
+        if: success()
+        env:
+          TG_BOT_TOKEN: ${{ secrets.TELEGRAM_KEISHA_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          python - <<'PY'
+          import http.client
+          import json
+          import os
+          import secrets
+          from pathlib import Path
+
+          token = os.environ.get('TG_BOT_TOKEN', '').strip()
+          chat_id = os.environ.get('TG_CHAT_ID', '').strip()
+          if not token or not chat_id:
+              print('Telegram belum dikonfigurasi: MP4 tersedia di Artifacts GitHub.')
+              raise SystemExit(0)
+
+          path = Path('Keisha_Video_Cloud_Starter_v1/hasil/keisha-rcd-video.mp4')
+          if not path.is_file():
+              raise RuntimeError('MP4 tidak ditemukan; notifikasi Telegram dibatalkan.')
+
+          boundary = 'keisha-' + secrets.token_hex(16)
+          caption = (
+              '🎬 Keisha | Uji produksi MP4 berhasil.\n'
+              'Video faceless 20 detik, tanpa suara.\n'
+              'STATUS: DRAF, BELUM DIPOSTING.\n'
+              'Periksa isi, lisensi media, dan caption sebelum publikasi.'
+          )
+          fields = {'chat_id': chat_id, 'caption': caption, 'supports_streaming': 'true'}
+          parts = []
+          for name, value in fields.items():
+              parts.append(
+                  (f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"\r\n\r\n{value}\r\n').encode()
+              )
+          parts.append(
+              (f'--{boundary}\r\nContent-Disposition: form-data; name="video"; '
+               'filename="keisha-rcd-video.mp4"\r\nContent-Type: video/mp4\r\n\r\n').encode()
+          )
+          parts.append(path.read_bytes())
+          parts.append(f'\r\n--{boundary}--\r\n'.encode())
+          data = b''.join(parts)
+          try:
+              con = http.client.HTTPSConnection('api.telegram.org', timeout=90)
+              con.request(
+                  'POST', f'/bot{token}/sendVideo', body=data,
+                  headers={'Content-Type': f'multipart/form-data; boundary={boundary}',
+                           'Content-Length': str(len(data))}
+              )
+              response = con.getresponse()
+              result = json.loads(response.read().decode('utf-8'))
+              con.close()
+              if response.status != 200 or not result.get('ok'):
+                  raise RuntimeError('Telegram menolak kiriman')
+          except Exception:
+              raise RuntimeError('Gagal kirim Telegram. Periksa token, chat ID, dan izin bot tanpa membagikan rahasia.') from None
+          print('MP4 uji berhasil dikirim ke Telegram. Belum diposting ke sosial media.')
+          PY
