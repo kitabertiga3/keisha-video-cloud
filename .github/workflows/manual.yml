@@ -1,4 +1,4 @@
-name: Keisha - Studio MP4 V3.3 Gratis Offline
+name: Keisha - Studio MP4 V3.4 Musik Adaptif
 
 on:
   workflow_dispatch:
@@ -15,6 +15,11 @@ on:
       voice:
         description: 'piper (gratis offline) atau mati; perintah natural/sintetis/nilasari lama otomatis memakai Piper'
         default: 'piper'
+        required: false
+        type: string
+      music:
+        description: 'otomatis, tenang, ceria, inspiratif, fokus, dramatis, mati'
+        default: 'otomatis'
         required: false
         type: string
       visuals:
@@ -61,10 +66,10 @@ jobs:
             echo 'FFmpeg dan font sudah tersedia; lewati instalasi ulang.'
           fi
 
-      - name: Pillow + Piper offline gratis
+      - name: Pillow + Piper + generator musik original
         run: |
           python -m pip install -r Keisha_Video_Cloud_Starter_v1/requirements.txt
-          python -m pip install "piper-tts>=1.2,<2"
+          python -m pip install "piper-tts>=1.2,<2" "numpy>=1.24,<3"
 
       - name: Cache model Piper Indonesia
         uses: actions/cache@v4
@@ -77,12 +82,14 @@ jobs:
         working-directory: Keisha_Video_Cloud_Starter_v1
         run: python -m unittest discover -s tests -v
 
-      - name: Produksi desain beragam + suara Piper offline utuh
+      - name: Produksi desain, suara lembut dan musik latar original
         working-directory: Keisha_Video_Cloud_Starter_v1
         env:
           VIDEO_NASKAH: ${{ inputs.naskah }}
           VIDEO_STYLE: ${{ inputs.style }}
           VIDEO_VOICE: ${{ inputs.voice }}
+          VIDEO_MUSIC: ${{ inputs.music }}
+          VIDEO_MUSIC_VOLUME: "0.20"
           VIDEO_CTA: ${{ inputs.cta }}
           VIDEO_VISUALS: ${{ inputs.visuals }}
         run: python render_studio.py
@@ -98,7 +105,9 @@ jobs:
           info=json.loads(p.read_text(encoding='utf-8'))
           if (info.get('voice') != 'mati') and not info.get('audio_verified'):
               raise SystemExit('GAGAL: Narasi hilang, MP4 tidak dikirim ke Telegram')
-          print('Audio OK:', info.get('voice'), 'durasi:', info.get('duration'))
+          if info.get('music_enabled') and info.get('music_source')!='original_programmatic_instrumental':
+              raise SystemExit('GAGAL: musik bukan dari generator original')
+          print('Audio OK:', info.get('voice'), '| musik:', info.get('music_mood'), '| durasi:', info.get('duration'))
           PYVERIFY
 
       - name: Simpan MP4 dan data produksi
@@ -131,9 +140,10 @@ jobs:
           path=root/'keisha-rcd-video.mp4'
           data=json.loads((root/'metadata.json').read_text(encoding='utf-8'))
           desc={'piper':'Piper Indonesia (offline, tanpa kredit TTS)','mati':'tanpa suara'}[data['voice']]
-          caption=(f"🎬 Keisha Studio v3.3 GRATIS | MP4 berhasil\n"
+          caption=(f"🎬 Keisha Studio v3.4 MUSIK | MP4 berhasil\n"
                    f"Desain per slide: {', '.join(data['scene_styles'])}\n"
                    f"Audio terverifikasi: {'ya' if data['audio_verified'] else 'tidak'} | {desc}\n"
+                   f"🎵 Musik original: {data.get('music_mood', 'mati')} | lembut di belakang narasi\n"
                    f"Durasi: {data['duration']} detik\n"
                    f"STATUS: DRAF, BELUM DIPOSTING.\n"
                    f"Periksa isi, narasi, dan caption sebelum publikasi.")
