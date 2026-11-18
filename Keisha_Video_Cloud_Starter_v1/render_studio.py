@@ -374,9 +374,9 @@ def piper_audio(narration, output):
     try:
         run = subprocess.run([
             'piper', '--model', str(model), '--output_file', str(output),
-            '--length_scale', '1.10',  # Gaya B: tempo sedikit lebih lembut (bukan Nilasari asli).
-            '--noise_scale', '0.48', '--noise_w', '0.55',
-            '--sentence_silence', '0.14',
+            '--length_scale', '0.98',  # v3.5: artikulasi lebih tegas dan ritme tidak mengulur.
+            '--noise_scale', '0.60', '--noise_w', '0.62',
+            '--sentence_silence', '0.11',
         ], input=narration + '\n', text=True, capture_output=True, timeout=210)
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise RuntimeError('Piper tidak selesai: ' + type(exc).__name__) from exc
@@ -422,15 +422,20 @@ def create():
     style = 'otomatis' if style in ('otomatis', 'auto', '') else style
     if style not in STYLES + ('otomatis',):
         raise ValueError('Gaya tersedia: ' + ', '.join(STYLES))
-    voice = os.environ.get('VIDEO_VOICE', 'piper').lower().strip()
-    if voice in ('otomatis', 'natural', 'sintetis', 'nilasari', 'gratis', 'perempuan', ''):
-        voice = 'piper'  # Legacy Telegram commands use the free voice automatically.
-    if voice not in ('piper', 'mati'):
-        raise ValueError('Suara tersedia: piper (gratis) atau mati')
+    requested_voice = os.environ.get('VIDEO_VOICE', 'piper').lower().strip()
+    if requested_voice in ('natural','manusia','pocket','perempuan'):
+        voice = 'natural'  # Pocket TTS Indonesia, voice prompt CC0; beta, not Nilasari.
+    elif requested_voice in ('mati','off'):
+        voice = 'mati'
+    elif requested_voice in ('otomatis','piper','tegas','gratis','sintetis','nilasari',''):
+        voice = 'piper'
+    else:
+        raise ValueError('Pilihan suara: piper/tegas, natural/manusia, mati')
+    voice_fallback_reason = None
 
     music_request = os.environ.get('VIDEO_MUSIC', 'otomatis').strip().lower()
     music_mood = choose_mood(raw, music_request)
-    music_volume = float(os.environ.get('VIDEO_MUSIC_VOLUME', '0.20'))
+    music_volume = float(os.environ.get('VIDEO_MUSIC_VOLUME', '0.14'))
     if not (0.05 <= music_volume <= 0.30):
         raise ValueError('VIDEO_MUSIC_VOLUME harus antara 0.05 dan 0.30')
 
@@ -444,14 +449,26 @@ def create():
         clips.append(card)
 
     audio = OUT / 'keisha-suara-gratis.wav'
+    actual_voice = voice
     if voice == 'mati':
         cuts = [4.0 * n for n in range(5)]
         speech_duration = 20.0
     else:
         sentences = [narration_for_scene(h, b, cta if i == 4 else '')
                      for i, (h, b) in enumerate(zip(headings, bodies))]
-        narration = ' '.join(sentences)  # Satu tuturan panjang, bukan klip per slide.
-        speech_duration = piper_audio(narration, audio)
+        narration = ' '.join(sentences)
+        if voice == 'natural':
+            try:
+                from natural_voice import natural_audio
+                speech_duration = natural_audio(narration, audio)
+            except Exception as e:
+                # Jangan diam-diam mengaku pakai model natural jika gagal.
+                voice_fallback_reason = f'{type(e).__name__}: {str(e)[:180]}'
+                print('PERINGATAN: Pocket TTS belum berhasil; fallback ke Piper tegas:',voice_fallback_reason,flush=True)
+                actual_voice = 'piper'
+                speech_duration = piper_audio(narration, audio)
+        else:
+            speech_duration = piper_audio(narration, audio)
         cuts = approximate_cuts(sentences, speech_duration)
 
     video_length = speech_duration + (0.40 if voice != 'mati' else 0)
@@ -485,21 +502,22 @@ def create():
     elif music_mood == 'mati':
         ff('-i',silent,'-i',audio,'-map','0:v:0','-map','1:a:0',
            '-c:v','copy','-c:a','aac','-b:a','160k','-ar','44100',
-           '-af','highpass=f=70,lowpass=f=10500,acompressor=threshold=-20dB:ratio=2:attack=30:release=300,loudnorm=I=-17:TP=-2:LRA=10,apad=pad_dur=0.40',
+           '-af','highpass=f=85,lowpass=f=10400,equalizer=f=2650:t=q:w=0.9:g=2.1,acompressor=threshold=-23dB:ratio=2.2:attack=15:release=170,loudnorm=I=-16:TP=-1.8:LRA=8,apad=pad_dur=0.40',
            '-t',f'{video_length:.3f}', '-movflags','+faststart',video)
     else:
         # Keep the music low under the narrator. Sidechain compression reduces the
         # original instrumental track whenever the narrator speaks; no abrupt cuts.
         fadeout_start=max(0.0,video_length-.85)
         filter_graph=(
-            '[1:a]highpass=f=70,lowpass=f=10500,'
-            'acompressor=threshold=-20dB:ratio=2:attack=30:release=300,'
-            'loudnorm=I=-17:TP=-2:LRA=10,'
+            '[1:a]highpass=f=85,lowpass=f=10400,'
+            'equalizer=f=2650:t=q:w=0.9:g=2.1,'
+            'acompressor=threshold=-23dB:ratio=2.2:attack=15:release=170,'
+            'loudnorm=I=-16:TP=-1.8:LRA=8,'
             f'apad=pad_dur=0.40,atrim=duration={video_length:.4f},'
             'aresample=44100,aformat=channel_layouts=stereo,asplit=2[voice][trigger];'
             f'[2:a]aresample=44100,aformat=channel_layouts=stereo,'
             f'atrim=duration={video_length:.4f},'
-            f'volume={music_volume:.3f},afade=t=in:st=0:d=0.40,'
+            f'lowpass=f=4700,volume={music_volume:.3f},afade=t=in:st=0:d=0.40,'
             f'afade=t=out:st={fadeout_start:.4f}:d=0.85[bed];'
             '[bed][trigger]sidechaincompress=threshold=0.042:ratio=4.5:'
             'attack=40:release=400[ducked];'
@@ -519,8 +537,10 @@ def create():
     has_audio = bool(verify.stdout.strip())
     if voice != 'mati' and not has_audio:
         raise RuntimeError('MP4 kehilangan audio. Tidak dikirim ke Telegram.')
-    info = {'version':'3.4','style':style,'scene_styles':[x['style'] for x in art],
-            'visuals':art,'voice':voice,'voice_style':'B-lembut (Piper offline, B referensi karakter)',
+    info = {'version':'3.5','style':style,'scene_styles':[x['style'] for x in art],
+            'visuals':art,'voice':actual_voice,'voice_requested':voice,
+            'voice_fallback_reason':voice_fallback_reason,
+            'voice_style':'tegas dan jelas (Piper) / natural beta (Pocket, referensi CC0)',
             'audio_verified':has_audio,'narration_verified':has_audio and voice!='mati',
             'music_enabled':music_mood!='mati','music_mood':music_mood,
             'music_volume':music_volume if music_info else 0,
@@ -531,12 +551,12 @@ def create():
             'narration_continuous':voice!='mati',
             'audio_timing_exact':False,
             'scene_start_seconds':[round(v,3) for v in cuts],
-            'voice_id':'id_ID-news_tts-medium' if voice!='mati' else None,
+            'voice_id':('pocket-tts-indonesian-6l-CC0' if actual_voice=='natural' else 'id_ID-news_tts-medium' if actual_voice=='piper' else None),
             'scene_timing':'estimated_offline' if voice!='mati' else 'fixed_silent',
-            'tts_cloud_requests':0}
+            'tts_cloud_requests':0, 'voice_notice':'Pocket TTS Indonesian oleh anak10thn, CC-BY-4.0 (jika voice natural)'}
     (OUT/'metadata.json').write_text(json.dumps(info, ensure_ascii=False, indent=2),
                                     encoding='utf-8')
-    print('KEISHA STUDIO V3.4 MUSIK ORIGINAL GRATIS:', video, '| voice:', voice,
+    print('KEISHA STUDIO V3.5 SUARA TEGAS + NATURAL BETA + MUSIK ORIGINAL GRATIS:', video, '| voice:', actual_voice,
           '| one continuous audio:', info['narration_continuous'],
           '| audio verified:', has_audio, '| duration:', info['duration'])
 
