@@ -83,7 +83,7 @@ def card(path, index, heading, body, cta):
 
 def build_video(folder, headings, bodies, cta):
     """Generate a 20-second silent vertical H.264 MP4 with 5 original cards."""
-    folder = Path(folder)
+    folder = Path(folder).resolve()
     folder.mkdir(parents=True, exist_ok=True)
     images = []
     for i in range(5):
