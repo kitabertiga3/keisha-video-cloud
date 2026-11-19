@@ -1,0 +1,123 @@
+name: Keisha - CEK Koneksi Buffer dan Cloudinary (TANPA POSTING)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cek-koneksi:
+    name: Periksa API dan 3 Channel
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Cek Buffer + Cloudinary (hanya baca, tidak unggah, tidak posting)
+        env:
+          BUFFER_API_KEY: ${{ secrets.BUFFER_API_KEY }}
+          CLOUDINARY_CLOUD_NAME: ${{ secrets.CLOUDINARY_CLOUD_NAME }}
+          CLOUDINARY_API_KEY: ${{ secrets.CLOUDINARY_API_KEY }}
+          CLOUDINARY_API_SECRET: ${{ secrets.CLOUDINARY_API_SECRET }}
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import base64
+          import json
+          import os
+          import sys
+          import urllib.error
+          import urllib.parse
+          import urllib.request
+
+          required = (
+              'BUFFER_API_KEY',
+              'CLOUDINARY_CLOUD_NAME',
+              'CLOUDINARY_API_KEY',
+              'CLOUDINARY_API_SECRET',
+          )
+          missing = [key for key in required if not os.environ.get(key, '').strip()]
+          if missing:
+              sys.exit('GAGAL: GitHub Secret belum tersedia: ' + ', '.join(missing))
+          print('OK: 4 GitHub Secrets terisi (nilai kunci tidak ditampilkan).', flush=True)
+
+          def read_json(req, service):
+              try:
+                  with urllib.request.urlopen(req, timeout=25) as response:
+                      return json.loads(response.read().decode('utf-8'))
+              except urllib.error.HTTPError as exc:
+                  # Jangan pernah tampilkan header atau nilai token dalam log.
+                  sys.exit(f'GAGAL {service}: HTTP {exc.code}. Periksa izin/kunci layanan.')
+              except urllib.error.URLError as exc:
+                  sys.exit(f'GAGAL {service}: server tidak bisa dihubungi ({type(exc.reason).__name__}).')
+              except (ValueError, UnicodeError):
+                  sys.exit(f'GAGAL {service}: respons bukan JSON yang valid.')
+
+          # PERIKSA Cloudinary Admin API: hanya membaca 1 daftar video; tanpa upload.
+          cloud_name = os.environ['CLOUDINARY_CLOUD_NAME'].strip()
+          key = os.environ['CLOUDINARY_API_KEY'].strip()
+          secret = os.environ['CLOUDINARY_API_SECRET'].strip()
+          auth = base64.b64encode(f'{key}:{secret}'.encode()).decode()
+          url = 'https://api.cloudinary.com/v1_1/' + urllib.parse.quote(cloud_name, safe='') + '/resources/video?max_results=1'
+          req = urllib.request.Request(url, headers={
+              'Authorization': 'Basic ' + auth,
+              'Accept': 'application/json',
+              'User-Agent': 'KeishaStudioConnectivityCheck/1.0',
+          })
+          cloud = read_json(req, 'Cloudinary')
+          if not isinstance(cloud.get('resources'), list):
+              sys.exit('GAGAL Cloudinary: kunci diterima tetapi respons daftar video tidak sesuai.')
+          print('OK: Cloudinary terhubung (read-only).', flush=True)
+
+          # PERIKSA Buffer GraphQL: hanya account dan daftar channel; tanpa posting.
+          token = os.environ['BUFFER_API_KEY'].strip()
+          def buffer_graphql(query):
+              req = urllib.request.Request(
+                  'https://api.buffer.com',
+                  data=json.dumps({'query': query}).encode('utf-8'),
+                  method='POST',
+                  headers={
+                      'Authorization': 'Bearer ' + token,
+                      'Content-Type': 'application/json',
+                      'Accept': 'application/json',
+                      'User-Agent': 'KeishaStudioConnectivityCheck/1.0',
+                  },
+              )
+              response = read_json(req, 'Buffer')
+              if response.get('errors'):
+                  msgs = [str(err.get('message', 'error'))[:180] for err in response['errors'][:2]]
+                  sys.exit('GAGAL Buffer GraphQL: ' + '; '.join(msgs))
+              return response.get('data') or {}
+
+          data = buffer_graphql('query GetOrganizations { account { organizations { id } } }')
+          organizations = (data.get('account') or {}).get('organizations') or []
+          if not organizations:
+              sys.exit('GAGAL Buffer: tidak ditemukan organisasi. Periksa akun API key.')
+
+          found = []
+          for org in organizations:
+              org_id = org.get('id')
+              if not org_id:
+                  continue
+              quoted_id = json.dumps(str(org_id))
+              query = f'query GetChannels {{ channels(input: {{ organizationId: {quoted_id} }}) {{ id name displayName service }} }}'
+              channels = buffer_graphql(query).get('channels') or []
+              found.extend(channels)
+
+          if not found:
+              sys.exit('GAGAL Buffer: API key valid, tetapi belum menemukan channel terhubung.')
+          services = set()
+          print('Channel terdeteksi:', flush=True)
+          for channel in found:
+              service = str(channel.get('service', '')).lower()
+              services.add(service)
+              display = channel.get('displayName') or channel.get('name') or '(tanpa nama)'
+              print(f'  - {service}: {display} | ID: {channel.get("id")}', flush=True)
+
+          expected = {'tiktok', 'facebook', 'youtube'}
+          unavailable = expected - services
+          if unavailable:
+              sys.exit('PERLU DICEK: Channel belum terdeteksi di Buffer: ' + ', '.join(sorted(unavailable)))
+
+          print('LULUS: Cloudinary + Buffer + TikTok + Facebook + YouTube sudah terhubung.', flush=True)
+          print('AMAN: Tidak ada video yang diunggah dan TIDAK ada posting yang dibuat.', flush=True)
+          PY
