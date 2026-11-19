@@ -6,7 +6,7 @@ class Tests(TestCase):
     def plan(self):
         return {
           'headings': [f'{i} Belajar Langkah Kecil' for i in range(5)],
-          'bodies': [f'Langkah {i} penting untuk memahami kebutuhan penonton pemula' for i in range(5)],
+          'bodies': [f'Langkah {i}: pilih satu pertanyaan penonton pemula, lalu jelaskan contoh tindakan yang sederhana dan realistis.' for i in range(5)],
           'cta': 'Cek detail produk di link profil',
           'captions': {x:'Lihat info produk digital melalui link profil. Tautan afiliasi. #Belajar' for x in ('tiktok','facebook','youtube')},
           'posting_time':'19:00', 'reason':'Jam hipotesis audiens sering membuka aplikasi malam hari'
@@ -203,6 +203,41 @@ class Tests(TestCase):
         data['captions']['youtube'] = 'Edukasi strategi konten yang berguna. ' * 10
         with self.assertRaisesRegex(ValueError, 'youtube: panjang'):
             m.validate_plan(data)
+
+
+    def test_reject_real_short_scene_from_previous_ai_plan(self):
+        bad = self.plan()
+        bad['bodies'] = [
+            'Konten harus menarik',
+            'Adegan vertikal lebih menarik',
+            'Konten bermanfaat sangat penting',
+            'Visual lebih berdampak',
+            'Konten harus disusun rapi'
+        ]
+        with self.assertRaisesRegex(ValueError, 'body 1 terlalu singkat'):
+            m.validate_plan(bad)
+
+    def test_reject_padded_scene_without_useful_word_count(self):
+        bad = self.plan()
+        bad['bodies'][2] = 'konten ' * 12
+        with self.assertRaisesRegex(ValueError, 'body 3 terlalu singkat'):
+            m.validate_plan(bad)
+
+    def test_plan_revises_short_scene_using_previous_draft(self):
+        import json
+        from unittest.mock import patch
+        bad = self.plan()
+        bad['bodies'][0] = 'Konten harus menarik'
+        good = self.plan()
+        with patch.object(m, 'ai_request',
+                          side_effect=[json.dumps(bad), json.dumps(good)]) as ai:
+            result = m.plan_for_day(date(2026, 11, 20))
+        self.assertEqual(ai.call_count, 2)
+        self.assertEqual(result['bodies'], good['bodies'])
+        revised_messages = ai.call_args.args[0]
+        self.assertEqual(revised_messages[-2]['role'], 'assistant')
+        self.assertIn('Konten harus menarik', revised_messages[-2]['content'])
+        self.assertIn('body 1', revised_messages[-1]['content'])
 
     def test_cannot_invent_ai(self):
         from unittest.mock import patch
