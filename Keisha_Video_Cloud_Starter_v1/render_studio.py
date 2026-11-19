@@ -85,16 +85,16 @@ def clean_plain_video_topic(raw):
     if text.startswith('{') or '\n' in text:
         return text
     settings = re.compile(
-        r'(?:[\\s,;]+)(?:gaya|desain|style|suara|voice|musik|music|backsound|background\\s+music)'
-        r'\\s*:\\s*(?:otomatis|majalah|neon|poster|kartu|minimal|diagonal|nilasari|piper|'
+        r'(?:[\s,;]+)(?:gaya|desain|style|suara|voice|musik|music|backsound|background\s+music)'
+        r'\s*:\s*(?:otomatis|majalah|neon|poster|kartu|minimal|diagonal|nilasari|piper|'
         r'gratis|perempuan|sintetis|natural|manusia|tegas|mati|tenang|ceria|inspiratif|'
-        r'fokus|dramatis)\\b',
+        r'fokus|dramatis)\b',
         re.I,
     )
     text = settings.sub(' ', text)
-    text = re.sub(r'(?:\\s*,\\s*){2,}', ', ', text)
-    text = re.sub(r'\\s+([,.;:])', r'\\1', text)
-    return text.strip(' \\t,;')
+    text = re.sub(r'(?:\s*,\s*){2,}', ', ', text)
+    text = re.sub(r'\s+([,.;:])', r'\1', text)
+    return text.strip(' \t,;')
 
 
 def parse_studio_script(raw):
