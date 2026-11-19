@@ -205,6 +205,35 @@ class Tests(TestCase):
             m.validate_plan(data)
 
 
+
+    def test_scene_149_chars_from_live_failure_now_valid(self):
+        data = self.plan()
+        base = ('Mulai dengan mencatat satu masalah penonton, lalu tampilkan contoh '
+                'perubahan judul yang lebih jelas supaya penonton tahu langkah praktis.')
+        scene = base.ljust(149, '!')
+        self.assertEqual(len(scene), 149)
+        data['bodies'][2] = scene
+        self.assertEqual(m.validate_plan(data)['bodies'][2], scene)
+
+    def test_scene_220_char_limit_accepted_without_truncation(self):
+        data = self.plan()
+        base = ('Coba pilih satu masalah penonton yang nyata, lalu tunjukkan dua contoh '
+                'judul berbeda dan jelaskan kenapa salah satunya lebih mudah dipahami. ')
+        scene = (base * 3)[:220]
+        self.assertEqual(len(scene), 220)
+        data['bodies'][2] = scene
+        self.assertEqual(m.validate_plan(data)['bodies'][2], scene)
+
+    def test_scene_221_char_limit_still_rejected(self):
+        data = self.plan()
+        base = ('Coba pilih satu masalah penonton yang nyata, lalu tunjukkan dua contoh '
+                'judul berbeda dan jelaskan kenapa salah satunya lebih mudah dipahami. ')
+        scene = (base * 3)[:221]
+        self.assertEqual(len(scene), 221)
+        data['bodies'][2] = scene
+        with self.assertRaisesRegex(ValueError, r'body 3: panjang 221 karakter; wajib 10-220'):
+            m.validate_plan(data)
+
     def test_reject_real_short_scene_from_previous_ai_plan(self):
         bad = self.plan()
         bad['bodies'] = [

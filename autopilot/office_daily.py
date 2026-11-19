@@ -195,7 +195,9 @@ def validate_plan(data: dict) -> dict:
     if not isinstance(heads, list) or not isinstance(bodies, list) or len(heads) != 5 or len(bodies) != 5:
         raise ValueError('Naskah harus 5 judul dan 5 isi berbeda.')
     h = [clean_string(x, 68, f'heading {i}') for i, x in enumerate(heads, 1)]
-    b = [clean_string(x, 145, f'body {i}') for i, x in enumerate(bodies, 1)]
+    # Toleransi panjang aman untuk teks yang masih dibungkus oleh render_studio.wrap.
+    # Prompt tetap meminta naskah singkat; jangan menolak scene yang hanya lewat 4 karakter.
+    b = [clean_string(x, 220, f'body {i}') for i, x in enumerate(bodies, 1)]
     for i, scene in enumerate(b, 1):
         # Reject slogans masquerading as 40-60 second educational narration.
         if (len(scene) < 75 or len(scene.split()) < 11 or
@@ -236,7 +238,8 @@ def plan_for_day(today: date) -> dict:
               "CTA mengajak lihat info di link profil. Tanpa karakter JSON di isi teks. "
               "Balas HANYA satu objek JSON valid (tanpa markdown/penjelasan) berisi: "
               "headings (5 string UNIK, masing-masing 15-55 karakter), "
-              "bodies (5 string UNIK, masing-masing 95-135 karakter DAN minimal 15 kata), "
+              "bodies (5 string UNIK, target 100-160 karakter dan minimal 15 kata; " 
+              "batas maksimum kelonggaran 220 karakter per adegan), "
               "WAJIB isi 5 adegan berurutan: adegan 1 masalah/hook spesifik, "
               "adegan 2 penyebab yang dapat dijelaskan, adegan 3 contoh tindakan pertama, "
               "adegan 4 contoh tindakan kedua, adegan 5 langkah praktis penutup. "
@@ -273,7 +276,7 @@ def plan_for_day(today: date) -> dict:
                 {'role':'assistant','content':answer[:7000] if isinstance(answer, str) else ''},
                 {'role':'user','content':'Draf di atas ditolak QC: ' + reason +
                  '. TULIS ULANG objek JSON yang sama, perbaiki kolom bermasalah. '
-                 'Untuk bodies, setiap adegan wajib minimal 75 karakter dan 11 kata, '
+                 'Untuk bodies, setiap adegan wajib 75-220 karakter dan 11 kata, '
                  'berisi tips/contoh konkret sesuai tema dan tidak generik. '
                  'Jaga semua fakta/tautan tetap akurat. Hanya kirim JSON valid.'},
             ]
