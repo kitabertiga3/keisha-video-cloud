@@ -73,6 +73,9 @@ def extract_ai_text(value: dict) -> str:
             text = result.get(key)
             if isinstance(text, str) and text.strip():
                 return text.strip()
+            # JSON Mode can return a parsed response object instead of a string.
+            if isinstance(text, dict) and text:
+                return json.dumps(text, ensure_ascii=False)
         # Current Workers AI chat-completion models return result.choices[].message.content.
         choices = result.get('choices', [])
         if isinstance(choices, list):
@@ -94,7 +97,15 @@ def extract_ai_text(value: dict) -> str:
         keys = ','.join(sorted(str(k) for k in result.keys()))
     else:
         keys = type(result).__name__
-    raise RuntimeError('Workers AI tidak mengembalikan teks naskah; bentuk hasil: ' + keys)
+    # Include only structural metadata, never generated text or credentials.
+    first = (result.get('choices') or [None])[0] if isinstance(result, dict) else None
+    finish = first.get('finish_reason') if isinstance(first, dict) else None
+    raise AIEmptyResponseError('Workers AI tidak mengembalikan teks naskah; '
+                               'bentuk hasil: ' + keys + '; finish_reason=' + str(finish))
+
+
+class AIEmptyResponseError(RuntimeError):
+    """Provider returned HTTP 200 but no usable final text."""
 
 
 def ai_request(messages: list[dict]) -> str:
@@ -102,12 +113,14 @@ def ai_request(messages: list[dict]) -> str:
     account = os.environ.get('CLOUDFLARE_ACCOUNT_ID', '').strip()
     if not token or not re.fullmatch(r'[a-fA-F0-9]{32}', account):
         raise RuntimeError('Perlu CLOUDFLARE_AI_API_TOKEN dan CLOUDFLARE_ACCOUNT_ID di GitHub Secrets.')
-    # The previous llama-3.1-8b-instruct model was deprecated on May 30, 2026.
-    # Keep the model independent of the Telegram Worker and scheduling workflow.
-    model = '@cf/google/gemma-4-26b-a4b-it'
+    # Use an active non-reasoning model supporting Cloudflare Workers AI JSON Mode.
+    # Gemma 4 sometimes returns HTTP 200 with empty choices[].message.content.
+    # This changes only GitHub Keisha planning, not the Cloudflare Telegram Worker.
+    model = '@cf/meta/llama-3.3-70b-instruct-fp8-fast'
     endpoint = f'https://api.cloudflare.com/client/v4/accounts/{account}/ai/run/{model}'
-    payload = {'messages': messages, 'max_completion_tokens': 3000,
-               'temperature': 0.45, 'stream': False}
+    payload = {'messages': messages, 'max_tokens': 3000,
+               'response_format': {'type': 'json_object'},
+               'temperature': 0.35, 'stream': False}
     req = urllib.request.Request(endpoint, method='POST',
         data=json.dumps(payload, ensure_ascii=False).encode('utf-8'),
         headers={'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json'})
@@ -202,10 +215,10 @@ def plan_for_day(today: date) -> dict:
     # The AI can occasionally produce overlong headings or invalid JSON.
     # Regenerate at most twice; never silently truncate, fabricate, or publish bad content.
     for attempt in range(1, 4):
-        answer = ai_request(messages)
         try:
+            answer = ai_request(messages)
             plan = validate_plan(parse_json_reply(answer))
-        except ValueError as exc:
+        except (ValueError, AIEmptyResponseError) as exc:
             reason = str(exc)
             print(f'Rencana AI belum lolos QC (percobaan {attempt}/3): {reason}', file=sys.stderr)
             if attempt == 3:
