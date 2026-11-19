@@ -1,0 +1,99 @@
+name: Keisha - AI Office Autopilot Harian (AMAN)
+
+on:
+  schedule:
+    - cron: '17 8 * * *'
+      timezone: 'Asia/Jakarta'
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'check = uji kode, plan = uji AI, schedule = produksi+jadan posting'
+        required: true
+        default: check
+        type: choice
+        options:
+          - check
+          - plan
+          - schedule
+
+permissions:
+  contents: read
+
+concurrency:
+  group: keisha-autopilot-daily
+  cancel-in-progress: false
+
+jobs:
+  daily-office:
+    if: ${{ github.event_name != 'schedule' || vars.AUTOPILOT_ENABLED == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    env:
+      RUN_MODE: ${{ github.event_name == 'schedule' && 'schedule' || inputs.mode }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_AI_API_TOKEN: ${{ secrets.CLOUDFLARE_AI_API_TOKEN }}
+      BUFFER_API_KEY: ${{ secrets.BUFFER_API_KEY }}
+      CLOUDINARY_CLOUD_NAME: ${{ secrets.CLOUDINARY_CLOUD_NAME }}
+      CLOUDINARY_API_KEY: ${{ secrets.CLOUDINARY_API_KEY }}
+      CLOUDINARY_API_SECRET: ${{ secrets.CLOUDINARY_API_SECRET }}
+      TELEGRAM_KEISHA_TOKEN: ${{ secrets.TELEGRAM_KEISHA_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Cek sintaks dan tes keamanan dulu
+        run: |
+          python -m py_compile autopilot/office_daily.py
+          python -m unittest discover -s autopilot -p 'test_*.py' -v
+      - name: AI menyusun naskah dan strategi (mode plan/schedule)
+        if: ${{ env.RUN_MODE != 'check' }}
+        run: python autopilot/office_daily.py plan --plan autopilot_plan.json
+      - name: Siapkan suara dan musik gratis untuk Keisha
+        if: ${{ env.RUN_MODE == 'schedule' }}
+        run: |
+          python -m pip install -r Keisha_Video_Cloud_Starter_v1/requirements.txt
+          python -m pip install 'numpy>=1.24,<3' 'piper-tts>=1.2,<2' cloudinary
+          python -m pip install --upgrade --index-url https://download.pytorch.org/whl/cpu torch
+          python -m pip install 'pocket-tts==3.1.0'
+      - name: Cache model suara
+        if: ${{ env.RUN_MODE == 'schedule' }}
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface/hub
+          key: pocket-id-6l-v35
+      - name: Render MP4 menggunakan mesin Keisha yang sekarang
+        if: ${{ env.RUN_MODE == 'schedule' }}
+        env:
+          VIDEO_VOICE: natural
+          VIDEO_MUSIC: otomatis
+          VIDEO_STYLE: otomatis
+          VIDEO_MUSIC_VOLUME: '0.14'
+        run: |
+          export VIDEO_NASKAH="$(python -c 'import json; p=json.load(open("autopilot_plan.json")); print(json.dumps({k:p[k] for k in ("headings","bodies","cta")},ensure_ascii=False))')"
+          cd Keisha_Video_Cloud_Starter_v1
+          python render_studio.py
+      - name: Pastikan video valid lalu jadwalkan SATU ke tiap channel
+        if: ${{ env.RUN_MODE == 'schedule' }}
+        run: |
+          python autopilot/office_daily.py schedule \
+            --plan autopilot_plan.json \
+            --video Keisha_Video_Cloud_Starter_v1/hasil/keisha-rcd-video.mp4 \
+            --metadata Keisha_Video_Cloud_Starter_v1/hasil/metadata.json \
+            --result autopilot_result.json
+      - name: Laporkan kegagalan satu kali tanpa retry posting
+        if: ${{ failure() && env.RUN_MODE == 'schedule' }}
+        run: python autopilot/office_daily.py report_failure
+      - name: Simpan laporan dan hasil produksi
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Keisha-Autopilot-Report
+          path: |
+            autopilot_plan.json
+            autopilot_result.json
+            Keisha_Video_Cloud_Starter_v1/hasil/keisha-rcd-video.mp4
+            Keisha_Video_Cloud_Starter_v1/hasil/metadata.json
+          if-no-files-found: ignore
+          retention-days: 7
