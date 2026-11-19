@@ -164,7 +164,7 @@ def clean_string(v: object, limit: int, field: str) -> str:
 
 OFFICIAL_AFFILIATE_LINK = 'lynk.id/dirgakhaa'
 AFFILIATE_DISCLOSURE = 'Tautan afiliasi.'
-OTHER_LINK = re.compile(r'(?i)(?:https?://|www\\.)[^\\s]+|\\b[\\w-]+\\.(?:com|id|net|org|co)/[^\\s]+')
+OTHER_LINK = re.compile(r'(?i)(?:https?://|www\.)[^\s]+|\b[\w-]+\.(?:com|id|net|org|co)/[^\s]+')
 
 
 def complete_caption(value: object, platform: str) -> str:
@@ -183,7 +183,7 @@ def complete_caption(value: object, platform: str) -> str:
             raise ValueError(f'{platform}: caption mengandung tautan yang bukan link profil resmi.')
     if OFFICIAL_AFFILIATE_LINK not in caption.lower():
         caption += ' Cek info: ' + OFFICIAL_AFFILIATE_LINK + '.'
-    if not re.search(r'\\b(?:afiliasi|affiliate)\\b', caption, re.I):
+    if not re.search(r'\b(?:afiliasi|affiliate)\b', caption, re.I):
         caption += ' ' + AFFILIATE_DISCLOSURE
     return caption
 
