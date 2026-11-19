@@ -162,6 +162,32 @@ def clean_string(v: object, limit: int, field: str) -> str:
     return v
 
 
+OFFICIAL_AFFILIATE_LINK = 'lynk.id/dirgakhaa'
+AFFILIATE_DISCLOSURE = 'Tautan afiliasi.'
+OTHER_LINK = re.compile(r'(?i)(?:https?://|www\.)[^\s]+|\b[\w-]+\.(?:com|id|net|org|co)/[^\s]+')
+
+
+def complete_caption(value: object, platform: str) -> str:
+    """Append the verified profile URL and affiliate disclosure, not invented sales claims.
+
+    This is deterministic caption metadata, not a fabricated AI script. Reject
+    unexpected external links rather than publishing a potentially wrong URL.
+    """
+    if not isinstance(value, str):
+        raise ValueError(f'{platform}: caption harus berupa teks.')
+    caption = ' '.join(value.split()).strip()
+    if not caption:
+        raise ValueError(f'{platform}: caption kosong.')
+    for match in OTHER_LINK.finditer(caption):
+        if OFFICIAL_AFFILIATE_LINK not in match.group(0).lower():
+            raise ValueError(f'{platform}: caption mengandung tautan yang bukan link profil resmi.')
+    if OFFICIAL_AFFILIATE_LINK not in caption.lower():
+        caption += ' Cek info: ' + OFFICIAL_AFFILIATE_LINK + '.'
+    if not re.search(r'\b(?:afiliasi|affiliate)\b', caption, re.I):
+        caption += ' ' + AFFILIATE_DISCLOSURE
+    return caption
+
+
 def validate_plan(data: dict) -> dict:
     if not isinstance(data, dict):
         raise ValueError('Rencana bukan JSON object.')
@@ -176,9 +202,13 @@ def validate_plan(data: dict) -> dict:
     captions = data.get('captions')
     if not isinstance(captions, dict):
         raise ValueError('Caption tiap platform tidak ada.')
-    c = {p: clean_string(captions.get(p), 620 if p != 'youtube' else 320, p) for p in ('tiktok','facebook','youtube')}
-    if any('link' not in v.lower() and 'profil' not in v.lower() for v in c.values()):
-        raise ValueError('Caption harus memberi arah menuju link profil.')
+    c = {
+        p: clean_string(complete_caption(captions.get(p), p),
+                        620 if p != 'youtube' else 320, p)
+        for p in ('tiktok', 'facebook', 'youtube')
+    }
+    if any(OFFICIAL_AFFILIATE_LINK not in v.lower() for v in c.values()):
+        raise ValueError('Caption harus mencantumkan tautan profil resmi.')
     hhmm = data.get('posting_time')
     if hhmm not in SLOTS:
         raise ValueError('Jam posting harus salah satu slot yang disetujui.')

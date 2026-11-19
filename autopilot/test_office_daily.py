@@ -152,6 +152,58 @@ class Tests(TestCase):
         self.assertIn('karakter', str(ctx.exception))
         self.assertNotIn('teks-rahasia', str(ctx.exception))
 
+    def test_caption_missing_link_is_completed_once(self):
+        data = self.plan()
+        data['captions'] = {
+            p: 'Ini cara mengevaluasi ide konten untuk pemula secara realistis'
+            for p in ('tiktok', 'facebook', 'youtube')
+        }
+        plan = m.validate_plan(data)
+        for caption in plan['captions'].values():
+            self.assertIn('lynk.id/dirgakhaa', caption)
+            self.assertIn('Tautan afiliasi.', caption)
+            self.assertEqual(caption.count('lynk.id/dirgakhaa'), 1)
+            self.assertEqual(caption.count('Tautan afiliasi.'), 1)
+
+    def test_caption_existing_link_and_disclosure_not_duplicated(self):
+        text = 'Pelajari materinya lewat lynk.id/dirgakhaa. Tautan afiliasi.'
+        self.assertEqual(m.complete_caption(text, 'youtube'), text)
+
+    def test_caption_without_link_only_adds_missing_link(self):
+        text = 'Baca penjelasan singkat ini, tautan afiliasi tersedia.'
+        actual = m.complete_caption(text, 'tiktok')
+        self.assertIn('lynk.id/dirgakhaa', actual)
+        self.assertEqual(actual.lower().count('afiliasi'), 1)
+
+    def test_caption_rejects_unapproved_external_link(self):
+        with self.assertRaisesRegex(ValueError, 'bukan link profil resmi'):
+            m.complete_caption('Cek info di https://contoh.com/promo', 'facebook')
+
+    def test_caption_rejects_empty_or_nontext(self):
+        for value in ('', None, {}, 5):
+            with self.assertRaises(ValueError):
+                m.complete_caption(value, 'tiktok')
+
+    def test_plan_missing_link_succeeds_on_single_ai_request(self):
+        import json
+        from unittest.mock import patch
+        data = self.plan()
+        data['captions'] = {
+            p: 'Konten singkat yang membantu pemula memahami strategi konten'
+            for p in ('tiktok', 'facebook', 'youtube')
+        }
+        with patch.object(m, 'ai_request', return_value=json.dumps(data)) as ai:
+            result = m.plan_for_day(date(2026, 11, 20))
+        self.assertEqual(ai.call_count, 1)
+        self.assertTrue(all('lynk.id/dirgakhaa' in text
+                            for text in result['captions'].values()))
+
+    def test_caption_does_not_truncate_long_text(self):
+        data = self.plan()
+        data['captions']['youtube'] = 'Edukasi strategi konten yang berguna. ' * 10
+        with self.assertRaisesRegex(ValueError, 'youtube: panjang'):
+            m.validate_plan(data)
+
     def test_cannot_invent_ai(self):
         from unittest.mock import patch
         with patch.dict('os.environ', {'CLOUDFLARE_AI_API_TOKEN':'','CLOUDFLARE_ACCOUNT_ID':''}):
