@@ -196,6 +196,11 @@ def validate_plan(data: dict) -> dict:
         raise ValueError('Naskah harus 5 judul dan 5 isi berbeda.')
     h = [clean_string(x, 68, f'heading {i}') for i, x in enumerate(heads, 1)]
     b = [clean_string(x, 145, f'body {i}') for i, x in enumerate(bodies, 1)]
+    for i, scene in enumerate(b, 1):
+        # Reject slogans masquerading as 40-60 second educational narration.
+        if len(scene) < 75 or len(scene.split()) < 11:
+            raise ValueError(f'body {i} terlalu singkat/umum; '
+                             'minimal 75 karakter dan 11 kata dengan langkah atau contoh konkret.')
     if len(set(x.lower() for x in h)) != 5 or len(set(x.lower() for x in b)) != 5:
         raise ValueError('Naskah mengulang adegan.')
     cta = clean_string(data.get('cta'), 56, 'cta')
@@ -230,7 +235,13 @@ def plan_for_day(today: date) -> dict:
               "CTA mengajak lihat info di link profil. Tanpa karakter JSON di isi teks. "
               "Balas HANYA satu objek JSON valid (tanpa markdown/penjelasan) berisi: "
               "headings (5 string UNIK, masing-masing 15-55 karakter), "
-              "bodies (5 string UNIK, masing-masing 35-125 karakter), "
+              "bodies (5 string UNIK, masing-masing 95-135 karakter DAN minimal 15 kata), "
+              "WAJIB isi 5 adegan berurutan: adegan 1 masalah/hook spesifik, "
+              "adegan 2 penyebab yang dapat dijelaskan, adegan 3 contoh tindakan pertama, "
+              "adegan 4 contoh tindakan kedua, adegan 5 langkah praktis penutup. "
+              "Setiap isi adegan harus menjelaskan sesuatu yang bisa langsung dipraktikkan, "
+              "bukan slogan. JANGAN tulis 'Konten harus menarik', 'Visual lebih berdampak', "
+              "'Konten bermanfaat sangat penting', atau kalimat generik sejenis. "
               "cta (string 15-45 karakter), "
               "captions (objek tiktok, facebook, youtube; tiap caption 40-250 karakter "
               "dan HARUS menyebut link profil atau profil), "
@@ -256,9 +267,13 @@ def plan_for_day(today: date) -> dict:
                                    + reason + '. Tidak ada video/posting yang dijalankan.') from None
             messages = [
                 {'role':'system','content':system},
-                {'role':'user','content':question + '\n\nJawaban sebelumnya ditolak QC: '
-                 + reason + '. Buat ulang SELURUH JSON dari awal dan patuhi batas karakter '
-                 'per kolom. Kembalikan hanya objek JSON tanpa markdown.'},
+                {'role':'user','content':question},
+                {'role':'assistant','content':answer[:7000] if isinstance(answer, str) else ''},
+                {'role':'user','content':'Draf di atas ditolak QC: ' + reason +
+                 '. TULIS ULANG objek JSON yang sama, perbaiki kolom bermasalah. '
+                 'Untuk bodies, setiap adegan wajib minimal 75 karakter dan 11 kata, '
+                 'berisi tips/contoh konkret sesuai tema dan tidak generik. '
+                 'Jaga semua fakta/tautan tetap akurat. Hanya kirim JSON valid.'},
             ]
             continue
         plan['date'] = today.isoformat()
