@@ -58,14 +58,56 @@ def day_topic(day: date) -> str:
     return TOPICS[(day.toordinal() - 1) % len(TOPICS)]
 
 
+def extract_ai_text(value: dict) -> str:
+    """Read both legacy Workers AI and current chat-completion response shapes.
+
+    Never manufacture a script when the provider returns no text.
+    """
+    if not isinstance(value, dict) or value.get('success') is not True:
+        raise RuntimeError('Workers AI mengembalikan status gagal.')
+    result = value.get('result')
+    if isinstance(result, str) and result.strip():
+        return result.strip()
+    if isinstance(result, dict):
+        for key in ('response', 'output_text', 'text'):
+            text = result.get(key)
+            if isinstance(text, str) and text.strip():
+                return text.strip()
+        # Current Workers AI chat-completion models return result.choices[].message.content.
+        choices = result.get('choices', [])
+        if isinstance(choices, list):
+            for choice in choices:
+                if not isinstance(choice, dict):
+                    continue
+                msg = choice.get('message') or {}
+                if not isinstance(msg, dict):
+                    continue
+                text = msg.get('content')
+                if isinstance(text, str) and text.strip():
+                    return text.strip()
+                if isinstance(text, list):
+                    pieces = [item.get('text', '') for item in text
+                              if isinstance(item, dict) and item.get('type') == 'text'
+                              and isinstance(item.get('text'), str)]
+                    if ''.join(pieces).strip():
+                        return ''.join(pieces).strip()
+        keys = ','.join(sorted(str(k) for k in result.keys()))
+    else:
+        keys = type(result).__name__
+    raise RuntimeError('Workers AI tidak mengembalikan teks naskah; bentuk hasil: ' + keys)
+
+
 def ai_request(messages: list[dict]) -> str:
     token = os.environ.get('CLOUDFLARE_AI_API_TOKEN', '').strip()
     account = os.environ.get('CLOUDFLARE_ACCOUNT_ID', '').strip()
     if not token or not re.fullmatch(r'[a-fA-F0-9]{32}', account):
         raise RuntimeError('Perlu CLOUDFLARE_AI_API_TOKEN dan CLOUDFLARE_ACCOUNT_ID di GitHub Secrets.')
-    model = '@cf/meta/llama-3.1-8b-instruct'
+    # The previous llama-3.1-8b-instruct model was deprecated on May 30, 2026.
+    # Keep the model independent of the Telegram Worker and scheduling workflow.
+    model = '@cf/google/gemma-4-26b-a4b-it'
     endpoint = f'https://api.cloudflare.com/client/v4/accounts/{account}/ai/run/{model}'
-    payload = {'messages': messages, 'max_tokens': 1800, 'temperature': 0.60}
+    payload = {'messages': messages, 'max_completion_tokens': 3000,
+               'temperature': 0.45, 'stream': False}
     req = urllib.request.Request(endpoint, method='POST',
         data=json.dumps(payload, ensure_ascii=False).encode('utf-8'),
         headers={'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json'})
@@ -73,16 +115,11 @@ def ai_request(messages: list[dict]) -> str:
         with urllib.request.urlopen(req, timeout=110) as response:
             value = json.load(response)
     except urllib.error.HTTPError as exc:
-        raise RuntimeError(f'Workers AI gagal HTTP {exc.code}; mungkin izin/token/kuota habis.') from None
+        raise RuntimeError(f'Workers AI gagal HTTP {exc.code} (model={model}); '
+                           'cek model/izin/kuota. Tidak melakukan posting.') from None
     except urllib.error.URLError:
         raise RuntimeError('Workers AI tidak dapat dihubungi.') from None
-    if not value.get('success', False):
-        raise RuntimeError('Workers AI mengembalikan status gagal.')
-    result = value.get('result') or {}
-    content = result.get('response') if isinstance(result, dict) else None
-    if not isinstance(content, str) or not content.strip():
-        raise RuntimeError('Workers AI tidak mengembalikan teks naskah.')
-    return content
+    return extract_ai_text(value)
 
 
 def parse_json_reply(text: str) -> dict:
