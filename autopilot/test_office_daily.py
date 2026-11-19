@@ -62,8 +62,10 @@ class Tests(TestCase):
                 actual = m.ai_request([{'role': 'user', 'content': 'tes'}])
         self.assertEqual(actual, 'contoh teks')
         req = mock.call_args.args[0]
-        self.assertIn('/ai/run/@cf/google/gemma-4-26b-a4b-it', req.full_url)
+        self.assertIn('/ai/run/@cf/meta/llama-3.3-70b-instruct-fp8-fast', req.full_url)
         self.assertEqual(json.loads(req.data)['stream'], False)
+        self.assertEqual(json.loads(req.data)['response_format'], {'type': 'json_object'})
+        self.assertEqual(json.loads(req.data)['max_tokens'], 3000)
 
 
     def test_plan_retries_overlong_heading_then_accepts_valid_response(self):
@@ -97,6 +99,40 @@ class Tests(TestCase):
         bad = self.plan()
         bad['headings'][0] = 'x'
         with patch.object(m, 'ai_request', return_value=json.dumps(bad)) as ai:
+            with self.assertRaisesRegex(RuntimeError, 'tiga percobaan'):
+                m.plan_for_day(date(2026, 11, 20))
+        self.assertEqual(ai.call_count, 3)
+
+
+    def test_workers_ai_json_object_result(self):
+        import json
+        obj = self.plan()
+        response = {'success': True, 'result': {'response': obj}}
+        self.assertEqual(json.loads(m.extract_ai_text(response)), obj)
+
+    def test_workers_ai_empty_chat_content_has_safe_diagnostic(self):
+        reply = {'success': True, 'result': {'choices': [{
+            'finish_reason': 'length',
+            'message': {'content': '', 'reasoning': 'private-not-for-logs'}}]}}
+        with self.assertRaises(m.AIEmptyResponseError) as ctx:
+            m.extract_ai_text(reply)
+        self.assertIn('finish_reason=length', str(ctx.exception))
+        self.assertNotIn('private-not-for-logs', str(ctx.exception))
+
+    def test_plan_retries_empty_ai_response_once_then_succeeds(self):
+        import json
+        from unittest.mock import patch
+        with patch.object(m, 'ai_request', side_effect=[
+            m.AIEmptyResponseError('empty model output'),
+            json.dumps(self.plan())]) as ai:
+            plan = m.plan_for_day(date(2026, 11, 20))
+        self.assertEqual(ai.call_count, 2)
+        self.assertEqual(plan['posting_time'], '19:00')
+
+    def test_plan_aborts_after_three_empty_ai_responses(self):
+        from unittest.mock import patch
+        with patch.object(m, 'ai_request',
+                          side_effect=m.AIEmptyResponseError('empty model output')) as ai:
             with self.assertRaisesRegex(RuntimeError, 'tiga percobaan'):
                 m.plan_for_day(date(2026, 11, 20))
         self.assertEqual(ai.call_count, 3)
