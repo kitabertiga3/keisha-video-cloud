@@ -65,6 +65,57 @@ class Tests(TestCase):
         self.assertIn('/ai/run/@cf/google/gemma-4-26b-a4b-it', req.full_url)
         self.assertEqual(json.loads(req.data)['stream'], False)
 
+
+    def test_plan_retries_overlong_heading_then_accepts_valid_response(self):
+        import json
+        from unittest.mock import patch
+        bad = self.plan()
+        bad['headings'][0] = 'Judul panjang untuk konten ' + 'tentang audiens ' * 7
+        good = self.plan()
+        with patch.object(m, 'ai_request',
+                          side_effect=[json.dumps(bad), json.dumps(good)]) as ai:
+            result = m.plan_for_day(date(2026, 11, 20))
+        self.assertEqual(result['headings'], good['headings'])
+        self.assertEqual(ai.call_count, 2)
+        self.assertIn('heading 1', ai.call_args.args[0][-1]['content'])
+        self.assertEqual(result['date'], '2026-11-20')
+
+    def test_plan_retries_forbidden_format_then_accepts_valid_response(self):
+        import json
+        from unittest.mock import patch
+        bad = self.plan()
+        bad['headings'][0] = 'Judul untuk pemula [ubah sesuai tema]'
+        with patch.object(m, 'ai_request',
+                          side_effect=[json.dumps(bad), json.dumps(self.plan())]) as ai:
+            result = m.plan_for_day(date(2026, 11, 20))
+        self.assertEqual(result['posting_time'], '19:00')
+        self.assertEqual(ai.call_count, 2)
+
+    def test_plan_stops_after_three_invalid_replies_without_fallback(self):
+        import json
+        from unittest.mock import patch
+        bad = self.plan()
+        bad['headings'][0] = 'x'
+        with patch.object(m, 'ai_request', return_value=json.dumps(bad)) as ai:
+            with self.assertRaisesRegex(RuntimeError, 'tiga percobaan'):
+                m.plan_for_day(date(2026, 11, 20))
+        self.assertEqual(ai.call_count, 3)
+
+    def test_plan_does_not_retry_ai_api_errors(self):
+        from unittest.mock import patch
+        with patch.object(m, 'ai_request', side_effect=RuntimeError('HTTP 401')) as ai:
+            with self.assertRaisesRegex(RuntimeError, 'HTTP 401'):
+                m.plan_for_day(date(2026, 11, 20))
+        self.assertEqual(ai.call_count, 1)
+
+    def test_string_validation_reports_length_without_model_content(self):
+        very_long = 'teks-rahasia-' * 8
+        with self.assertRaises(ValueError) as ctx:
+            m.clean_string(very_long, 68, 'heading 1')
+        self.assertIn('heading 1', str(ctx.exception))
+        self.assertIn('karakter', str(ctx.exception))
+        self.assertNotIn('teks-rahasia', str(ctx.exception))
+
     def test_cannot_invent_ai(self):
         from unittest.mock import patch
         with patch.dict('os.environ', {'CLOUDFLARE_AI_API_TOKEN':'','CLOUDFLARE_ACCOUNT_ID':''}):
