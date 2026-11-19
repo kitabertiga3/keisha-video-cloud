@@ -198,7 +198,8 @@ def validate_plan(data: dict) -> dict:
     b = [clean_string(x, 145, f'body {i}') for i, x in enumerate(bodies, 1)]
     for i, scene in enumerate(b, 1):
         # Reject slogans masquerading as 40-60 second educational narration.
-        if len(scene) < 75 or len(scene.split()) < 11:
+        if (len(scene) < 75 or len(scene.split()) < 11 or
+                len(set(re.findall(r'\w+', scene.lower()))) < 7):
             raise ValueError(f'body {i} terlalu singkat/umum; '
                              'minimal 75 karakter dan 11 kata dengan langkah atau contoh konkret.')
     if len(set(x.lower() for x in h)) != 5 or len(set(x.lower() for x in b)) != 5:
@@ -256,6 +257,7 @@ def plan_for_day(today: date) -> dict:
     # The AI can occasionally produce overlong headings or invalid JSON.
     # Regenerate at most twice; never silently truncate, fabricate, or publish bad content.
     for attempt in range(1, 4):
+        answer = ''
         try:
             answer = ai_request(messages)
             plan = validate_plan(parse_json_reply(answer))
