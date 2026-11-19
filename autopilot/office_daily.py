@@ -139,10 +139,13 @@ def parse_json_reply(text: str) -> dict:
 
 def clean_string(v: object, limit: int, field: str) -> str:
     if not isinstance(v, str):
-        raise ValueError(f'{field} bukan teks.')
+        raise ValueError(f'{field} harus berupa teks.')
     v = ' '.join(v.split()).strip()
-    if not 10 <= len(v) <= limit or BAD.search(v):
-        raise ValueError(f'{field} melanggar batas format/kualitas.')
+    if not 10 <= len(v) <= limit:
+        # Give useful diagnostics without leaking the model's unreviewed text.
+        raise ValueError(f'{field}: panjang {len(v)} karakter; wajib 10-{limit}.')
+    if BAD.search(v):
+        raise ValueError(f'{field}: mengandung tanda kurung siku/kurawal atau format terlarang.')
     return v
 
 
@@ -182,16 +185,43 @@ def plan_for_day(today: date) -> dict:
               "JANGAN mengarang isi ebook, testimoni, diskon, hasil, atau keuntungan. "
               "Dilarang janjikan cuan. Caption berbeda per platform, transparan affiliate. "
               "CTA mengajak lihat info di link profil. Tanpa karakter JSON di isi teks. "
-              "Balas HANYA JSON valid object keys headings[5], bodies[5], cta, "
-              "captions{tiktok,facebook,youtube}, posting_time, reason. "
-              "Pilih posting_time 18:30 atau 19:00 atau 20:00 WIB berdasar HIPOTESIS jam audiens, "
-              "bukan mengaku melihat analytics. Jangan memakai kutipan di teks video.")
+              "Balas HANYA satu objek JSON valid (tanpa markdown/penjelasan) berisi: "
+              "headings (5 string UNIK, masing-masing 15-55 karakter), "
+              "bodies (5 string UNIK, masing-masing 35-125 karakter), "
+              "cta (string 15-45 karakter), "
+              "captions (objek tiktok, facebook, youtube; tiap caption 40-250 karakter "
+              "dan HARUS menyebut link profil atau profil), "
+              "posting_time (PERSIS salah satu 18:30, 19:00, 20:00), "
+              "reason (string 20-150 karakter). "
+              "Jangan pakai kurung siku/kurawal di DALAM nilai teks, label Gaya:/Suara:/Musik:, "
+              "atau koma berturut-turut. "
+              "Pilih jam berdasarkan HIPOTESIS audiens, bukan klaim analytics real-time. "
+              "Jangan memakai kutipan di teks video.")
     question = f'Tanggal: {today.isoformat()}. Tema unik hari ini: {focus}. Buat rencana konten lengkap.'
-    answer = ai_request([{'role':'system','content':system},{'role':'user','content':question}])
-    plan = validate_plan(parse_json_reply(answer))
-    plan['date'] = today.isoformat()
-    plan['theme'] = focus
-    return plan
+    messages = [{'role':'system','content':system},{'role':'user','content':question}]
+    # The AI can occasionally produce overlong headings or invalid JSON.
+    # Regenerate at most twice; never silently truncate, fabricate, or publish bad content.
+    for attempt in range(1, 4):
+        answer = ai_request(messages)
+        try:
+            plan = validate_plan(parse_json_reply(answer))
+        except ValueError as exc:
+            reason = str(exc)
+            print(f'Rencana AI belum lolos QC (percobaan {attempt}/3): {reason}', file=sys.stderr)
+            if attempt == 3:
+                raise RuntimeError('Naskah AI gagal validasi setelah tiga percobaan: '
+                                   + reason + '. Tidak ada video/posting yang dijalankan.') from None
+            messages = [
+                {'role':'system','content':system},
+                {'role':'user','content':question + '\n\nJawaban sebelumnya ditolak QC: '
+                 + reason + '. Buat ulang SELURUH JSON dari awal dan patuhi batas karakter '
+                 'per kolom. Kembalikan hanya objek JSON tanpa markdown.'},
+            ]
+            continue
+        plan['date'] = today.isoformat()
+        plan['theme'] = focus
+        return plan
+    raise RuntimeError('Validasi naskah tidak selesai.')
 
 
 def due_at(today: date, hhmm: str, now: datetime | None = None) -> datetime:
