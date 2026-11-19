@@ -1,0 +1,32 @@
+name: Keisha - Tes Kode Draf Sosmed (tanpa API)
+on:
+  pull_request:
+    paths:
+      - 'Keisha_Video_Cloud_Starter_v1/social_drafts.py'
+      - 'Keisha_Video_Cloud_Starter_v1/tests/test_social_drafts.py'
+      - '.github/workflows/keisha_social_drafts.yml'
+      - '.github/workflows/test_social_drafts.yml'
+permissions:
+  contents: read
+jobs:
+  offline-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Sintaks Python
+        run: python -m py_compile Keisha_Video_Cloud_Starter_v1/social_drafts.py Keisha_Video_Cloud_Starter_v1/tests/test_social_drafts.py
+      - name: Uji lokal tanpa koneksi eksternal
+        run: python -m unittest Keisha_Video_Cloud_Starter_v1/tests/test_social_drafts.py -v
+      - name: Validasi bentuk YAML
+        run: |
+          python -m pip install pyyaml
+          python - <<'PY'
+          from pathlib import Path
+          import yaml
+          y = yaml.safe_load(Path(".github/workflows/keisha_social_drafts.yml").read_text())
+          assert "jobs" in y and "validate-and-draft" in y["jobs"]
+          print("Workflow YAML valid")
+          PY
