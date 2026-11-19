@@ -75,6 +75,28 @@ def storyboard(raw, style, seed):
     return results
 
 
+def clean_plain_video_topic(raw):
+    """Remove trailing generation settings accidentally embedded in a plain topic.
+
+    JSON storyboards and explicit multi-line scripts remain untouched.
+    Voice/music settings are still controlled by VIDEO_VOICE and VIDEO_MUSIC.
+    """
+    text = str(raw or '').strip()
+    if text.startswith('{') or '\n' in text:
+        return text
+    settings = re.compile(
+        r'(?:[\\s,;]+)(?:gaya|desain|style|suara|voice|musik|music|backsound|background\\s+music)'
+        r'\\s*:\\s*(?:otomatis|majalah|neon|poster|kartu|minimal|diagonal|nilasari|piper|'
+        r'gratis|perempuan|sintetis|natural|manusia|tegas|mati|tenang|ceria|inspiratif|'
+        r'fokus|dramatis)\\b',
+        re.I,
+    )
+    text = settings.sub(' ', text)
+    text = re.sub(r'(?:\\s*,\\s*){2,}', ', ', text)
+    text = re.sub(r'\\s+([,.;:])', r'\\1', text)
+    return text.strip(' \\t,;')
+
+
 def parse_studio_script(raw):
     """Validasi format naskah. Jangan membacakan karakter JSON sebagai teks video."""
     text = str(raw or '').strip().lstrip('\ufeff')
@@ -464,6 +486,9 @@ def create():
     raw = os.environ.get('VIDEO_NASKAH', '').strip()
     if not raw:
         raise ValueError('Naskah tidak boleh kosong')
+    raw = clean_plain_video_topic(raw)
+    if not raw:
+        raise ValueError('Topik kosong setelah membersihkan pengaturan produksi')
     headings, bodies, cta = parse_studio_script(raw)
     if os.environ.get('VIDEO_CTA', '').strip():
         cta = clip_words(os.environ['VIDEO_CTA'], 56)
