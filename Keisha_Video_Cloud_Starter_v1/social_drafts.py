@@ -196,6 +196,73 @@ def find_matching_posts(token, channel_id, caption_text, media_url, max_pages=30
     return list(matches.values())
 
 
+def guard_daily_channel_posts(token, channel_id, day, *, max_pages=30):
+    """Read-only safety check: block another post when a channel has posts for day.
+
+    Buffer may apply additional limits not visible through the API. This is a
+    conservative one-post-per-day guard, NOT a quota availability guarantee.
+    """
+    from datetime import date, datetime, timezone, timedelta
+    from zoneinfo import ZoneInfo
+    target = date.fromisoformat(day)
+    jakarta = ZoneInfo("Asia/Jakarta")
+    orgs = (graphql(token, "query { account { organizations { id } } }")
+            .get("account") or {}).get("organizations") or []
+    if not orgs:
+        raise RuntimeError("Tidak dapat mengecek posting harian: organisasi Buffer kosong.")
+    matched = {}
+    for org in orgs:
+        after = None
+        seen = set()
+        for _ in range(max_pages):
+            args = ("first: 50, input: {organizationId: "
+                    + json.dumps(org["id"])
+                    + ", filter: {status: [scheduled, sending, sent, error], channelIds: ["
+                    + json.dumps(channel_id) + "]}}")
+            if after:
+                args = "after: " + json.dumps(after) + ", " + args
+            data = graphql(token, "query { posts(" + args
+                           + ") { edges { node { id status channelId createdAt dueAt } } "
+                           "pageInfo { hasNextPage endCursor } } }")
+            posts = data.get("posts")
+            if not isinstance(posts, dict):
+                raise RuntimeError("Inventaris posting harian Buffer tidak tersedia.")
+            for item in posts.get("edges") or []:
+                post = (item or {}).get("node") or {}
+                if str(post.get("channelId")) != str(channel_id):
+                    continue
+                status = str(post.get("status") or "").lower()
+                # 'sent' posts may have been scheduled earlier; createdAt is
+                # deliberately conservative only for same-day creations.
+                timestamp = post.get("dueAt") if status == "scheduled" else post.get("createdAt")
+                if not timestamp:
+                    raise RuntimeError("Tanggal posting Buffer hilang. Jangan mengambil risiko duplikat.")
+                try:
+                    instant = datetime.fromisoformat(str(timestamp).replace("Z", "+00:00"))
+                    if instant.tzinfo is None:
+                        raise ValueError("Timezone missing")
+                    local_day = instant.astimezone(jakarta).date()
+                except ValueError:
+                    raise RuntimeError("Tanggal posting Buffer tidak valid.") from None
+                if local_day == target and post.get("id"):
+                    matched[post["id"]] = status
+            page = posts.get("pageInfo") or {}
+            if not page.get("hasNextPage"):
+                break
+            cursor = page.get("endCursor")
+            if not cursor or cursor in seen:
+                raise RuntimeError("Pagination Buffer tidak aman untuk cek harian.")
+            seen.add(cursor)
+            after = cursor
+        else:
+            raise RuntimeError("Daftar posting harian Buffer terlalu panjang.")
+    if matched:
+        raise RuntimeError("BATAS SATU POSTING PER CHANNEL: sudah ada "
+                           + ", ".join(str(k) + " (" + v + ")" for k,v in list(matched.items())[:3])
+                           + " pada " + day + ". Hentikan seluruh pengiriman.")
+    return True
+
+
 def save_scheduled_post(token, channel_id, url, text, *, platform, title, due_at):
     """Schedule one future post using the metadata also required by drafts."""
     if not isinstance(due_at, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.000Z", due_at):
