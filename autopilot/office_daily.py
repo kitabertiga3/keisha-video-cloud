@@ -190,8 +190,8 @@ def complete_caption(value: object, platform: str) -> str:
 
 # Tautan asli hanya untuk caption. Video/voice cukup arahkan ke bio.
 _VIDEO_AFFILIATE_RE = re.compile(
-    r'(?i)(?:(?:link|tautan)\\s+(?:di\\s+)?(?:profil|bio)\\s*[:\\-]?\\s*)?'
-    r'(?:https?://)?(?:www\\.)?lynk\\.id/dirgakhaa/?'
+    r'(?i)(?:(?:link|tautan)\s+(?:di\s+)?(?:profil|bio)\s*[:\-]?\s*)?'
+    r'(?:https?://)?(?:www\.)?lynk\.id/dirgakhaa/?'
 )
 
 
@@ -203,9 +203,9 @@ def normalize_video_copy(value: object) -> object:
     if not isinstance(value, str):
         return value
     text = _VIDEO_AFFILIATE_RE.sub('link bio', value)
-    text = re.sub(r'(?i)\\b(?:link|tautan)\\s+(?:di\\s+)?profil\\b', 'link bio', text)
-    text = re.sub(r'(?i)\\blink\\s+di\\s+bio\\b', 'link bio', text)
-    text = re.sub(r'\\s+([.,;:!?])', r'\\1', ' '.join(text.split()))
+    text = re.sub(r'(?i)\b(?:link|tautan)\s+(?:di\s+)?profil\b', 'link bio', text)
+    text = re.sub(r'(?i)\blink\s+di\s+bio\b', 'link bio', text)
+    text = re.sub(r'\s+([.,;:!?])', r'\1', ' '.join(text.split()))
     return text.strip()
 
 
