@@ -736,9 +736,6 @@ def recover_tiktok_run21(plan_path: Path, prior_result_path: Path,
     differs. No automatic retries of a partially successful request.
     """
     import subprocess
-    import cloudinary
-    import cloudinary.api
-    import cloudinary.uploader
     base = Path(__file__).resolve().parents[1] / 'Keisha_Video_Cloud_Starter_v1'
     if str(base) not in sys.path:
         sys.path.insert(0, str(base))
@@ -799,6 +796,9 @@ def recover_tiktok_run21(plan_path: Path, prior_result_path: Path,
     if info['fps'] < 29 or info['fps'] > 31:
         raise RuntimeError('QC video 30 FPS tidak lolos.')
 
+    import cloudinary
+    import cloudinary.api
+    import cloudinary.uploader
     required = ('CLOUDINARY_CLOUD_NAME','CLOUDINARY_API_KEY','CLOUDINARY_API_SECRET')
     if any(not os.getenv(k) for k in required):
         raise RuntimeError('Cloudinary credentials tidak lengkap.')
