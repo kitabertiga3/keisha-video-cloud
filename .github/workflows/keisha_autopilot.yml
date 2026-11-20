@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: 'check = tes kode, preflight = cek Buffer tanpa posting, plan = naskah, render = MP4, schedule = posting'
+        description: 'check = tes kode, preflight = cek koneksi, plan = naskah, render = MP4, drafts = draf tanpa posting, schedule = posting'
         required: true
         default: check
         type: choice
@@ -16,9 +16,10 @@ on:
           - preflight
           - plan
           - render
+          - drafts
           - schedule
       source_plan_run_id:
-        description: 'Khusus render: gunakan naskah dari run sukses #11 (kosong = buat baru)'
+        description: 'Untuk render/drafts: naskah sukses #11 (kosong = buat baru)'
         required: false
         default: '44637045432'
         type: string
@@ -56,10 +57,10 @@ jobs:
           python -m py_compile autopilot/office_daily.py
           python -m unittest discover -s autopilot -p 'test_*.py' -v
       - name: Periksa channel Buffer tanpa mengirim posting (preflight)
-        if: ${{ env.RUN_MODE == 'preflight' }}
+        if: ${{ env.RUN_MODE == 'preflight' || env.RUN_MODE == 'drafts' }}
         run: python autopilot/office_daily.py preflight --result autopilot_result.json
       - name: Ambil naskah AI yang sudah sukses (khusus render)
-        if: ${{ env.RUN_MODE == 'render' && inputs.source_plan_run_id != '' }}
+        if: ${{ (env.RUN_MODE == 'render' || env.RUN_MODE == 'drafts') && inputs.source_plan_run_id != '' }}
         uses: actions/download-artifact@v4
         with:
           name: Keisha-Autopilot-Report
@@ -67,7 +68,7 @@ jobs:
           github-token: ${{ github.token }}
           path: .
       - name: Validasi naskah tersimpan sebelum render
-        if: ${{ env.RUN_MODE == 'render' && inputs.source_plan_run_id != '' }}
+        if: ${{ (env.RUN_MODE == 'render' || env.RUN_MODE == 'drafts') && inputs.source_plan_run_id != '' }}
         run: |
           python - <<'PY'
           import json
@@ -81,10 +82,10 @@ jobs:
           print('Naskah lama dinormalisasi: URL pindah ke caption; video hanya menyebut bio.')
           PY
       - name: AI menyusun naskah dan strategi (mode plan/schedule/render baru)
-        if: ${{ env.RUN_MODE == 'plan' || env.RUN_MODE == 'schedule' || (env.RUN_MODE == 'render' && inputs.source_plan_run_id == '') }}
+        if: ${{ env.RUN_MODE == 'plan' || env.RUN_MODE == 'schedule' || ((env.RUN_MODE == 'render' || env.RUN_MODE == 'drafts') && inputs.source_plan_run_id == '') }}
         run: python autopilot/office_daily.py plan --plan autopilot_plan.json
       - name: Siapkan FFmpeg dan FFprobe untuk suara serta MP4
-        if: ${{ env.RUN_MODE == 'render' || env.RUN_MODE == 'schedule' }}
+        if: ${{ env.RUN_MODE == 'render' || env.RUN_MODE == 'drafts' || env.RUN_MODE == 'schedule' }}
         run: |
           set -euo pipefail
           if ! command -v ffmpeg >/dev/null 2>&1 || ! command -v ffprobe >/dev/null 2>&1; then
@@ -101,20 +102,20 @@ jobs:
           assert shutil.which('ffprobe'), 'FFprobe tidak ditemukan pada GitHub runner.'
           PY
       - name: Siapkan suara dan musik gratis untuk Keisha
-        if: ${{ env.RUN_MODE == 'render' || env.RUN_MODE == 'schedule' }}
+        if: ${{ env.RUN_MODE == 'render' || env.RUN_MODE == 'drafts' || env.RUN_MODE == 'schedule' }}
         run: |
           python -m pip install -r Keisha_Video_Cloud_Starter_v1/requirements.txt
           python -m pip install 'numpy>=1.24,<3' 'piper-tts>=1.2,<2' cloudinary
           python -m pip install --upgrade --index-url https://download.pytorch.org/whl/cpu torch
           python -m pip install 'pocket-tts==3.1.0'
       - name: Cache model suara
-        if: ${{ env.RUN_MODE == 'render' || env.RUN_MODE == 'schedule' }}
+        if: ${{ env.RUN_MODE == 'render' || env.RUN_MODE == 'drafts' || env.RUN_MODE == 'schedule' }}
         uses: actions/cache@v4
         with:
           path: ~/.cache/huggingface/hub
           key: pocket-id-6l-v35
       - name: Render MP4 menggunakan mesin Keisha yang sekarang
-        if: ${{ env.RUN_MODE == 'render' || env.RUN_MODE == 'schedule' }}
+        if: ${{ env.RUN_MODE == 'render' || env.RUN_MODE == 'drafts' || env.RUN_MODE == 'schedule' }}
         env:
           VIDEO_VOICE: natural
           VIDEO_MUSIC: otomatis
@@ -125,7 +126,7 @@ jobs:
           cd Keisha_Video_Cloud_Starter_v1
           python render_studio.py
       - name: QC video MP4 dan audio (tidak mengunggah)
-        if: ${{ env.RUN_MODE == 'render' || env.RUN_MODE == 'schedule' }}
+        if: ${{ env.RUN_MODE == 'render' || env.RUN_MODE == 'drafts' || env.RUN_MODE == 'schedule' }}
         run: |
           python - <<'PY'
           import json
@@ -138,6 +139,14 @@ jobs:
           video = validate_video(Path('Keisha_Video_Cloud_Starter_v1/hasil/keisha-rcd-video.mp4'), metadata)
           print('MP4 tervalidasi (tanpa upload/jadwal):', video)
           PY
+      - name: Simpan tiga DRAF Buffer (tidak mengaktifkan posting)
+        if: ${{ env.RUN_MODE == 'drafts' }}
+        run: |
+          python autopilot/office_daily.py drafts \
+            --plan autopilot_plan.json \
+            --video Keisha_Video_Cloud_Starter_v1/hasil/keisha-rcd-video.mp4 \
+            --metadata Keisha_Video_Cloud_Starter_v1/hasil/metadata.json \
+            --result autopilot_result.json
       - name: Pastikan video valid lalu jadwalkan SATU ke tiap channel
         if: ${{ env.RUN_MODE == 'schedule' }}
         run: |
