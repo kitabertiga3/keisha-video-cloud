@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import hashlib
 from datetime import datetime, date, timedelta, timezone
 import json
 import os
@@ -726,6 +727,72 @@ def verify_daily_publication() -> dict:
             'published_confirmed':all(v=='sent' for v in statuses.values())}
 
 
+def prepare_recovery_from_manifest(manifest_path: Path, out_dir: Path) -> dict:
+    """Restore Run #21 from checked-in metadata and exact original Cloudinary MP4.
+
+    No GitHub Actions artifact needed; this operation is read-only. The original
+    media must match the SHA-256 of the previously downloaded Run #21 artifact,
+    preventing wrong or transformed videos from being scheduled.
+    """
+    manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
+    source = manifest.get('video_url')
+    if not isinstance(source,str) or not re.fullmatch(
+        r'https://res\\.cloudinary\\.com/[A-Za-z0-9_-]+/video/upload/[A-Za-z0-9_./-]+\\.mp4', source):
+        raise RuntimeError('Recovery: tautan video sumber bukan URL Cloudinary MP4 yang diizinkan.')
+    expected = manifest.get('source_sha256','').lower()
+    if not re.fullmatch(r'[0-9a-f]{64}',expected):
+        raise RuntimeError('Recovery: checksum video sumber tidak tersedia.')
+    if source != manifest.get('previous_result',{}).get('cloudinary_url'):
+        raise RuntimeError('Recovery: URL tidak cocok dengan laporan Run #21.')
+    required = ('plan','previous_result','metadata')
+    if any(not isinstance(manifest.get(x),dict) for x in required):
+        raise RuntimeError('Recovery: metadata Run #21 tidak lengkap.')
+    if manifest['plan'].get('date') != manifest['previous_result'].get('date'):
+        raise RuntimeError('Recovery: tanggal laporan dan naskah tidak cocok.')
+    meta=manifest['metadata']
+    if any(meta.get(k) != manifest['plan'].get(k) for k in ('headings','bodies','cta')):
+        raise RuntimeError('Recovery: metadata dan naskah Run #21 berbeda.')
+    out_dir.mkdir(parents=True,exist_ok=True)
+    movie=out_dir/'Keisha_Video_Cloud_Starter_v1'/'hasil'/'keisha-rcd-video.mp4'
+    movie.parent.mkdir(parents=True,exist_ok=True)
+    temp=movie.with_suffix('.mp4.part')
+    digest=hashlib.sha256()
+    total=0
+    try:
+        request=urllib.request.Request(source,headers={'User-Agent':'KeishaRecovery/1.0'})
+        with urllib.request.urlopen(request,timeout=60) as response, temp.open('wb') as stream:
+            if response.status != 200:
+                raise RuntimeError('Recovery: server video tidak mengembalikan HTTP 200.')
+            while True:
+                block=response.read(65536)
+                if not block:
+                    break
+                total+=len(block)
+                if total>90*1024*1024:
+                    raise RuntimeError('Recovery: file lebih besar dari batas aman.')
+                digest.update(block)
+                stream.write(block)
+        if total != manifest['source_bytes'] or digest.hexdigest()!=expected:
+            raise RuntimeError('Recovery: video Cloudinary tidak identik dengan Run #21. '
+                               'Pemulihan dihentikan sebelum posting.')
+        temp.replace(movie)
+    finally:
+        temp.unlink(missing_ok=True)
+    files={
+        'autopilot_plan.json':manifest['plan'],
+        'autopilot_result.json':manifest['previous_result'],
+        'Keisha_Video_Cloud_Starter_v1/hasil/metadata.json':meta,
+    }
+    for relative, data in files.items():
+        destination=out_dir/relative
+        destination.parent.mkdir(parents=True,exist_ok=True)
+        destination.write_text(json.dumps(data,indent=2,ensure_ascii=False),
+                               encoding='utf-8')
+    print('Sumber Run #21 dipulihkan, checksum MP4 sesuai. '
+          'Tidak ada unggahan atau jadwal Buffer baru.')
+    return {'video_path':str(movie),'sha256':expected,'bytes':total}
+
+
 def recover_tiktok_run21(plan_path: Path, prior_result_path: Path,
                          video_path: Path, metadata_path: Path,
                          result_path: Path) -> dict:
@@ -864,12 +931,14 @@ def check_reporting_ready() -> None:
 
 def main():
     p=argparse.ArgumentParser()
-    p.add_argument('action',choices=('plan','preflight','drafts','audit_drafts','recover_drafts','schedule','record','activate','verify','check_reporting','recover_tiktok','report_failure'))
+    p.add_argument('action',choices=('plan','preflight','drafts','audit_drafts','recover_drafts','schedule','record','activate','verify','check_reporting','prepare_recovery','recover_tiktok','report_failure'))
     p.add_argument('--plan',default='autopilot_plan.json')
     p.add_argument('--video',default='Keisha_Video_Cloud_Starter_v1/hasil/keisha-rcd-video.mp4')
     p.add_argument('--metadata',default='Keisha_Video_Cloud_Starter_v1/hasil/metadata.json')
     p.add_argument('--result',default='autopilot_result.json')
     p.add_argument('--previous-result',default='previous_autopilot_result.json')
+    p.add_argument('--recovery-manifest',default='autopilot/recovery/2026-11-20-run21.json')
+    p.add_argument('--recovery-dir',default='run21')
     p.add_argument('--audit-date',default='2026-11-20')
     p.add_argument('--known-tiktok-draft-id',default='')
     args=p.parse_args()
@@ -905,6 +974,8 @@ def main():
     elif args.action=='recover_drafts':
         raise RuntimeError('Pemulihan draf masih dinonaktifkan sampai audit langsung'
                            ' Buffer selesai dan sudah diperiksa.')
+    elif args.action=='prepare_recovery':
+        prepare_recovery_from_manifest(Path(args.recovery_manifest),Path(args.recovery_dir))
     elif args.action=='recover_tiktok':
         recover_tiktok_run21(Path(args.plan),Path(args.previous_result),
                              Path(args.video),Path(args.metadata),Path(args.result))
