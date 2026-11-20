@@ -284,6 +284,23 @@ class Tests(TestCase):
         self.assertIn("if: ${{ env.RUN_MODE == 'schedule' }}", text[start:end])
         self.assertNotIn('RUN_MODE == \'render\'', text[start:end])
 
+    def test_render_prepares_ffmpeg_before_voice_and_video(self):
+        from pathlib import Path
+        workflow = Path(__file__).resolve().parents[1] / '.github' / 'workflows' / 'keisha_autopilot.yml'
+        content = workflow.read_text(encoding='utf-8')
+        prepare = content.index('      - name: Siapkan FFmpeg dan FFprobe untuk suara serta MP4')
+        install = content.index('      - name: Siapkan suara dan musik gratis untuk Keisha')
+        render = content.index('      - name: Render MP4 menggunakan mesin Keisha yang sekarang')
+        self.assertLess(prepare, install)
+        self.assertLess(install, render)
+        step = content[prepare:install]
+        self.assertIn("if: ${{ env.RUN_MODE == 'render' || env.RUN_MODE == 'schedule' }}", step)
+        self.assertIn('apt-get install -y ffmpeg', step)
+        self.assertIn("shutil.which('ffmpeg')", step)
+        self.assertIn("shutil.which('ffprobe')", step)
+        self.assertNotIn('BUFFER_API_KEY', step)
+        self.assertNotIn('CLOUDINARY_API_SECRET', step)
+
     def test_cannot_invent_ai(self):
         from unittest.mock import patch
         with patch.dict('os.environ', {'CLOUDFLARE_AI_API_TOKEN':'','CLOUDFLARE_ACCOUNT_ID':''}):
