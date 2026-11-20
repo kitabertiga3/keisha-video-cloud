@@ -159,6 +159,12 @@ jobs:
       - name: AI menyusun naskah dan strategi (mode plan/schedule/render baru)
         if: ${{ env.RUN_MODE == 'plan' || env.RUN_MODE == 'schedule' || env.RUN_MODE == 'go_live' || ((env.RUN_MODE == 'render' || env.RUN_MODE == 'drafts') && inputs.source_plan_run_id == '') }}
         run: python autopilot/office_daily.py plan --plan autopilot_plan.json
+      - name: Susun pembagian kerja karyawan AI (berdasarkan naskah sungguhan)
+        if: ${{ env.RUN_MODE == 'schedule' || env.RUN_MODE == 'go_live' }}
+        run: |
+          python autopilot/employee_work.py prepare \
+            --plan autopilot_plan.json \
+            --result autopilot_team.json
       - name: Siapkan FFmpeg dan FFprobe untuk suara serta MP4
         if: ${{ env.RUN_MODE == 'render' || env.RUN_MODE == 'drafts' || env.RUN_MODE == 'schedule' || env.RUN_MODE == 'go_live' }}
         run: |
@@ -230,6 +236,14 @@ jobs:
             --video Keisha_Video_Cloud_Starter_v1/hasil/keisha-rcd-video.mp4 \
             --metadata Keisha_Video_Cloud_Starter_v1/hasil/metadata.json \
             --result autopilot_result.json
+      - name: Catat bukti kerja dan hasil penjadwalan tiap divisi
+        if: ${{ always() && (env.RUN_MODE == 'schedule' || env.RUN_MODE == 'go_live') }}
+        run: |
+          if [[ -f autopilot_team.json && -f autopilot_result.json ]]; then
+            python autopilot/employee_work.py finish \
+              --schedule-result autopilot_result.json \
+              --result autopilot_team.json
+          fi
       - name: Simpan receipt jadwal Buffer yang terverifikasi (3/3)
         if: ${{ env.RUN_MODE == 'schedule' || env.RUN_MODE == 'go_live' || env.RUN_MODE == 'recover_tiktok' }}
         env:
@@ -251,6 +265,7 @@ jobs:
           path: |
             autopilot_plan.json
             autopilot_result.json
+            autopilot_team.json
             Keisha_Video_Cloud_Starter_v1/hasil/keisha-rcd-video.mp4
             Keisha_Video_Cloud_Starter_v1/hasil/metadata.json
           if-no-files-found: ignore
