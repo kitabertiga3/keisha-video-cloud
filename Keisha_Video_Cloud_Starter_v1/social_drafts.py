@@ -117,11 +117,14 @@ def save_draft(token, channel_id, url, text):
          f"channelId: {json.dumps(channel_id)}, schedulingType: automatic, "
          "mode: addToQueue, saveToDraft: true, "
          f"assets: [{{video: {{url: {json.dumps(url)}}}}}]"
-         "}) { ... on PostActionSuccess { post { id } } ... on MutationError { message } } }")
+         "}) { ... on PostActionSuccess { post { id status } } ... on MutationError { message } } }")
     result = graphql(token, q).get("createPost") or {}
-    post_id = (result.get("post") or {}).get("id")
+    post = result.get("post") or {}
+    post_id = post.get("id")
     if not post_id:
         raise RuntimeError("Tidak berhasil menyimpan draf Buffer: " + str(result.get("message", "unknown"))[:160])
+    if str(post.get("status", "")).lower() != "draft":
+        raise RuntimeError("Buffer tidak mengonfirmasi status draft. Periksa akun, jangan ulang otomatis.")
     return post_id
 
 def main():
