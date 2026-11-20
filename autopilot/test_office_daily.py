@@ -275,13 +275,13 @@ class Tests(TestCase):
         self.assertIn('          - render', text)
         self.assertIn('actions/download-artifact@v4', text)
         self.assertIn("run-id: ${{ inputs.source_plan_run_id }}", text)
-        self.assertIn("if: ${{ env.RUN_MODE == 'render' || env.RUN_MODE == 'drafts' || env.RUN_MODE == 'schedule' }}", text)
+        self.assertIn("if: ${{ env.RUN_MODE == 'render' || env.RUN_MODE == 'drafts' || env.RUN_MODE == 'schedule' || env.RUN_MODE == 'go_live' }}", text)
         self.assertIn("name: QC video MP4 dan audio (tidak mengunggah)", text)
-        self.assertIn("if: ${{ env.RUN_MODE == 'schedule' }}", text)
+        self.assertIn("if: ${{ env.RUN_MODE == 'schedule' || env.RUN_MODE == 'go_live' }}", text)
         self.assertNotIn("if: ${{ env.RUN_MODE == 'render' }}\n        run: |\n          python autopilot/office_daily.py schedule", text)
         start = text.index('      - name: Pastikan video valid lalu jadwalkan SATU ke tiap channel')
         end = text.index('      - name: Laporkan kegagalan satu kali tanpa retry posting',start)
-        self.assertIn("if: ${{ env.RUN_MODE == 'schedule' }}", text[start:end])
+        self.assertIn("if: ${{ env.RUN_MODE == 'schedule' || env.RUN_MODE == 'go_live' }}", text[start:end])
         self.assertNotIn('RUN_MODE == \'render\'', text[start:end])
 
     def test_render_prepares_ffmpeg_before_voice_and_video(self):
@@ -294,7 +294,7 @@ class Tests(TestCase):
         self.assertLess(prepare, install)
         self.assertLess(install, render)
         step = content[prepare:install]
-        self.assertIn("if: ${{ env.RUN_MODE == 'render' || env.RUN_MODE == 'drafts' || env.RUN_MODE == 'schedule' }}", step)
+        self.assertIn("if: ${{ env.RUN_MODE == 'render' || env.RUN_MODE == 'drafts' || env.RUN_MODE == 'schedule' || env.RUN_MODE == 'go_live' }}", step)
         self.assertIn('apt-get install -y ffmpeg', step)
         self.assertIn("shutil.which('ffmpeg')", step)
         self.assertIn("shutil.which('ffprobe')", step)
@@ -362,9 +362,9 @@ class Tests(TestCase):
         text = (Path(__file__).resolve().parents[1] /
                 '.github' / 'workflows' / 'keisha_autopilot.yml').read_text(encoding='utf-8')
         self.assertIn('          - preflight', text)
-        self.assertIn("if: ${{ env.RUN_MODE == 'preflight' || env.RUN_MODE == 'drafts' }}", text)
-        self.assertIn("if: ${{ env.RUN_MODE == 'schedule' }}", text)
-        self.assertIn("if: ${{ env.RUN_MODE == 'plan' || env.RUN_MODE == 'schedule' || ((env.RUN_MODE == 'render' || env.RUN_MODE == 'drafts') && inputs.source_plan_run_id == '') }}", text)
+        self.assertIn("if: ${{ env.RUN_MODE == 'preflight' || env.RUN_MODE == 'drafts' || env.RUN_MODE == 'go_live' || env.RUN_MODE == 'schedule' }}", text)
+        self.assertIn("if: ${{ env.RUN_MODE == 'schedule' || env.RUN_MODE == 'go_live' }}", text)
+        self.assertIn("if: ${{ env.RUN_MODE == 'plan' || env.RUN_MODE == 'schedule' || env.RUN_MODE == 'go_live' || ((env.RUN_MODE == 'render' || env.RUN_MODE == 'drafts') && inputs.source_plan_run_id == '') }}", text)
 
 
     def test_buffer_draft_requires_explicit_draft_confirmation(self):
@@ -425,7 +425,7 @@ class Tests(TestCase):
         self.assertIn('python autopilot/office_daily.py drafts', text)
         pub = text.index('      - name: Pastikan video valid lalu jadwalkan SATU ke tiap channel')
         end = text.index('      - name: Laporkan kegagalan satu kali tanpa retry posting', pub)
-        self.assertIn("if: ${{ env.RUN_MODE == 'schedule' }}", text[pub:end])
+        self.assertIn("if: ${{ env.RUN_MODE == 'schedule' || env.RUN_MODE == 'go_live' }}", text[pub:end])
         self.assertNotIn("env.RUN_MODE == 'drafts'", text[pub:end])
 
 
