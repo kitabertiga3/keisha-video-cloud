@@ -7,12 +7,13 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: 'check = tes kode, plan = buat naskah, render = MP4 tanpa posting, schedule = produksi + posting'
+        description: 'check = tes kode, preflight = cek Buffer tanpa posting, plan = naskah, render = MP4, schedule = posting'
         required: true
         default: check
         type: choice
         options:
           - check
+          - preflight
           - plan
           - render
           - schedule
@@ -54,6 +55,9 @@ jobs:
         run: |
           python -m py_compile autopilot/office_daily.py
           python -m unittest discover -s autopilot -p 'test_*.py' -v
+      - name: Periksa channel Buffer tanpa mengirim posting (preflight)
+        if: ${{ env.RUN_MODE == 'preflight' }}
+        run: python autopilot/office_daily.py preflight --result autopilot_result.json
       - name: Ambil naskah AI yang sudah sukses (khusus render)
         if: ${{ env.RUN_MODE == 'render' && inputs.source_plan_run_id != '' }}
         uses: actions/download-artifact@v4
@@ -77,7 +81,7 @@ jobs:
           print('Naskah lama dinormalisasi: URL pindah ke caption; video hanya menyebut bio.')
           PY
       - name: AI menyusun naskah dan strategi (mode plan/schedule/render baru)
-        if: ${{ env.RUN_MODE != 'check' && (env.RUN_MODE != 'render' || inputs.source_plan_run_id == '') }}
+        if: ${{ env.RUN_MODE == 'plan' || env.RUN_MODE == 'schedule' || (env.RUN_MODE == 'render' && inputs.source_plan_run_id == '') }}
         run: python autopilot/office_daily.py plan --plan autopilot_plan.json
       - name: Siapkan FFmpeg dan FFprobe untuk suara serta MP4
         if: ${{ env.RUN_MODE == 'render' || env.RUN_MODE == 'schedule' }}
