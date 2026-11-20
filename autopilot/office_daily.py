@@ -705,6 +705,28 @@ def record_scheduled_receipt(path: Path) -> dict:
     return receipt
 
 
+def record_immediate_receipt(path: Path) -> dict:
+    """Persist one-shot Buffer submissions before the next scheduled run.
+
+    Status is 'submitted', not verified as live. A partial submission is NOT
+    retried, and the daily guard remains fail-closed for ambiguous outcomes.
+    """
+    result = json.loads(path.read_text(encoding='utf-8'))
+    if result.get('status') != 'submitted' or result.get('mode') != 'publish_now':
+        raise RuntimeError('Publish Now belum dikonfirmasi 3/3; jangan ulang otomatis.')
+    posts = result.get('posts') or {}
+    if set(posts) != {'tiktok','facebook','youtube'}:
+        raise RuntimeError('ID Buffer belum lengkap untuk bukti Publish Now.')
+    for platform, post in posts.items():
+        if not post.get('id') or post.get('status') not in ('sent','sending','scheduled'):
+            raise RuntimeError('Respons Buffer tidak valid: '+platform)
+    receipt = {'date':result['date'], 'status':'submitted',
+               'published':False, 'delivery_only':True,
+               'posts':posts, 'mode':'publish_now'}
+    _github_put_new_file(AUTOPILOT_RECEIPT_DIR+'/'+receipt['date']+'.json',receipt)
+    return receipt
+
+
 def activate_daily_autopilot(path: Path) -> None:
     receipt = validated_schedule_receipt(path)
     # Only after 3/3 posts are accepted AND receipt is committed.
@@ -996,7 +1018,7 @@ def check_reporting_ready() -> None:
 
 def main():
     p=argparse.ArgumentParser()
-    p.add_argument('action',choices=('plan','preflight','drafts','audit_drafts','recover_drafts','schedule','record','activate','verify','check_reporting','prepare_recovery','recover_tiktok','report_failure','publish_now'))
+    p.add_argument('action',choices=('plan','preflight','drafts','audit_drafts','recover_drafts','schedule','record','activate','verify','check_reporting','prepare_recovery','recover_tiktok','report_failure','publish_now','record_now'))
     p.add_argument('--plan',default='autopilot_plan.json')
     p.add_argument('--video',default='Keisha_Video_Cloud_Starter_v1/hasil/keisha-rcd-video.mp4')
     p.add_argument('--metadata',default='Keisha_Video_Cloud_Starter_v1/hasil/metadata.json')
@@ -1071,6 +1093,8 @@ def main():
                         + 'Tidak ada posting ulang otomatis.')
         if result['errors']:
             raise RuntimeError('Pengiriman parsial; periksa Buffer. Jangan ulang otomatis.')
+    elif args.action=='record_now':
+        print('Buffer Publish Now receipt:', record_immediate_receipt(Path(args.result)))
     elif args.action=='schedule':
         plan=json.loads(Path(args.plan).read_text(encoding='utf-8'))
         if plan.get('date')!=datetime.now(WIB).date().isoformat():
