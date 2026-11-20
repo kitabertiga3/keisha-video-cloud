@@ -409,9 +409,34 @@ def upload_daily_once(video: Path, day: str) -> str:
     return url
 
 
+def preflight_connections() -> dict:
+    """Read-only checks before any real posting is enabled.
+
+    No media uploads, Telegram messages, Buffer mutations or scheduled posts.
+    """
+    from Keisha_Video_Cloud_Starter_v1.social_drafts import get_channels
+    required = ('BUFFER_API_KEY', 'CLOUDINARY_CLOUD_NAME',
+                'CLOUDINARY_API_KEY', 'CLOUDINARY_API_SECRET')
+    missing = [key for key in required if not os.environ.get(key, '').strip()]
+    result = {'buffer_channels': [], 'cloudinary_config_present': not any(
+        key.startswith('CLOUDINARY_') for key in missing),
+        'telegram_reporting_config_present': bool(
+            os.getenv('TELEGRAM_KEISHA_TOKEN') and os.getenv('TELEGRAM_CHAT_ID')),
+        'ready_to_test_drafts': False}
+    if missing:
+        raise RuntimeError('Preflight gagal: Secret belum tersedia: ' + ', '.join(missing)
+                           + '. Tidak ada upload atau posting.')
+    channels = get_channels(os.environ['BUFFER_API_KEY'])
+    result['buffer_channels'] = sorted(channels.keys())
+    result['ready_to_test_drafts'] = len(channels) == 3
+    if not result['ready_to_test_drafts']:
+        raise RuntimeError('Preflight gagal: tiga channel Buffer belum lengkap.')
+    return result
+
+
 def main():
     p=argparse.ArgumentParser()
-    p.add_argument('action',choices=('plan','schedule','report_failure'))
+    p.add_argument('action',choices=('plan','preflight','schedule','report_failure'))
     p.add_argument('--plan',default='autopilot_plan.json')
     p.add_argument('--video',default='Keisha_Video_Cloud_Starter_v1/hasil/keisha-rcd-video.mp4')
     p.add_argument('--metadata',default='Keisha_Video_Cloud_Starter_v1/hasil/metadata.json')
@@ -422,6 +447,11 @@ def main():
         plan=plan_for_day(today)
         Path(args.plan).write_text(json.dumps(plan,ensure_ascii=False,indent=2),encoding='utf-8')
         print(f'Rencana AI lengkap untuk {today}, tema: {plan["theme"]}, slot: {plan["posting_time"]} WIB.')
+    elif args.action=='preflight':
+        status=preflight_connections()
+        Path(args.result).write_text(json.dumps(status, ensure_ascii=False, indent=2), encoding='utf-8')
+        print('PRE-FLIGHT BACA SAJA: tiga channel Buffer tersedia; '
+              'Cloudinary credentials ada. Tidak ada posting atau upload.')
     elif args.action=='schedule':
         plan=json.loads(Path(args.plan).read_text(encoding='utf-8'))
         if plan.get('date')!=datetime.now(WIB).date().isoformat():
