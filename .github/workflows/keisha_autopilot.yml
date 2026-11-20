@@ -21,6 +21,7 @@ on:
           - render
           - drafts
           - schedule
+          - publish_now
       known_tiktok_draft_id:
         description: 'ID draf TikTok #16 untuk diverifikasi (hanya baca)'
         required: false
@@ -67,7 +68,7 @@ jobs:
           mode="${{ github.event_name == 'schedule' && 'schedule' || inputs.mode }}"
           day="$(TZ=Asia/Jakarta date +%F)"
           receipt=".github/keisha-autopilot-receipts/${day}.json"
-          if [[ "$mode" == "schedule" || "$mode" == "go_live" ]]; then
+          if [[ "$mode" == "schedule" || "$mode" == "go_live" || "$mode" == "publish_now" ]]; then
             if [[ -f "$receipt" ]]; then
               echo "allowed=false" >> "$GITHUB_OUTPUT"
               echo "Receipt for ${day} already exists. Skip safely: no repeat rendering, upload, or Buffer scheduling."
@@ -110,7 +111,7 @@ jobs:
           python -m py_compile autopilot/office_daily.py
           python -m unittest discover -s autopilot -p 'test_*.py' -v
       - name: Periksa channel Buffer tanpa mengirim posting (preflight)
-        if: ${{ env.RUN_MODE == 'preflight' || env.RUN_MODE == 'drafts' || env.RUN_MODE == 'go_live' || env.RUN_MODE == 'schedule' || env.RUN_MODE == 'recover_tiktok' }}
+        if: ${{ env.RUN_MODE == 'preflight' || env.RUN_MODE == 'drafts' || env.RUN_MODE == 'go_live' || env.RUN_MODE == 'schedule' || env.RUN_MODE == 'publish_now' || env.RUN_MODE == 'recover_tiktok' }}
         run: python autopilot/office_daily.py preflight --result autopilot_preflight.json
       - name: Siapkan SDK Cloudinary untuk audit BACA SAJA
         if: ${{ env.RUN_MODE == 'audit_drafts' }}
@@ -123,7 +124,7 @@ jobs:
             --known-tiktok-draft-id "${{ inputs.known_tiktok_draft_id }}" \
             --result autopilot_result.json
       - name: Pastikan laporan Telegram kantor siap sebelum auto scheduling
-        if: ${{ env.RUN_MODE == 'go_live' || env.RUN_MODE == 'schedule' || env.RUN_MODE == 'recover_tiktok' }}
+        if: ${{ env.RUN_MODE == 'go_live' || env.RUN_MODE == 'schedule' || env.RUN_MODE == 'publish_now' || env.RUN_MODE == 'recover_tiktok' }}
         run: python autopilot/office_daily.py check_reporting
       - name: Pulihkan naskah dan MP4 Run #21 dari Cloudinary yang terverifikasi (tanpa artifact lama)
         if: ${{ env.RUN_MODE == 'recover_tiktok' }}
@@ -170,16 +171,16 @@ jobs:
           print('Naskah lama dinormalisasi: URL pindah ke caption; video hanya menyebut bio.')
           PY
       - name: AI menyusun naskah dan strategi (mode plan/schedule/render baru)
-        if: ${{ env.RUN_MODE == 'plan' || env.RUN_MODE == 'schedule' || env.RUN_MODE == 'go_live' || ((env.RUN_MODE == 'render' || env.RUN_MODE == 'drafts') && inputs.source_plan_run_id == '') }}
+        if: ${{ env.RUN_MODE == 'plan' || env.RUN_MODE == 'schedule' || env.RUN_MODE == 'publish_now' || env.RUN_MODE == 'go_live' || ((env.RUN_MODE == 'render' || env.RUN_MODE == 'drafts') && inputs.source_plan_run_id == '') }}
         run: python autopilot/office_daily.py plan --plan autopilot_plan.json
       - name: Catat penugasan tim AI Office berdasarkan naskah nyata
-        if: ${{ env.RUN_MODE == 'schedule' || env.RUN_MODE == 'go_live' }}
+        if: ${{ env.RUN_MODE == 'schedule' || env.RUN_MODE == 'publish_now' || env.RUN_MODE == 'go_live' }}
         run: |
           python autopilot/team_ops.py planned \
             --plan autopilot_plan.json \
             --output ai_office_team_status.json
       - name: Siapkan FFmpeg dan FFprobe untuk suara serta MP4
-        if: ${{ env.RUN_MODE == 'render' || env.RUN_MODE == 'drafts' || env.RUN_MODE == 'schedule' || env.RUN_MODE == 'go_live' }}
+        if: ${{ env.RUN_MODE == 'render' || env.RUN_MODE == 'drafts' || env.RUN_MODE == 'schedule' || env.RUN_MODE == 'publish_now' || env.RUN_MODE == 'go_live' }}
         run: |
           set -euo pipefail
           if ! command -v ffmpeg >/dev/null 2>&1 || ! command -v ffprobe >/dev/null 2>&1; then
@@ -196,20 +197,20 @@ jobs:
           assert shutil.which('ffprobe'), 'FFprobe tidak ditemukan pada GitHub runner.'
           PY
       - name: Siapkan suara dan musik gratis untuk Keisha
-        if: ${{ env.RUN_MODE == 'render' || env.RUN_MODE == 'drafts' || env.RUN_MODE == 'schedule' || env.RUN_MODE == 'go_live' }}
+        if: ${{ env.RUN_MODE == 'render' || env.RUN_MODE == 'drafts' || env.RUN_MODE == 'schedule' || env.RUN_MODE == 'publish_now' || env.RUN_MODE == 'go_live' }}
         run: |
           python -m pip install -r Keisha_Video_Cloud_Starter_v1/requirements.txt
           python -m pip install 'numpy>=1.24,<3' 'piper-tts>=1.2,<2' cloudinary
           python -m pip install --upgrade --index-url https://download.pytorch.org/whl/cpu torch
           python -m pip install 'pocket-tts==3.1.0'
       - name: Cache model suara
-        if: ${{ env.RUN_MODE == 'render' || env.RUN_MODE == 'drafts' || env.RUN_MODE == 'schedule' || env.RUN_MODE == 'go_live' }}
+        if: ${{ env.RUN_MODE == 'render' || env.RUN_MODE == 'drafts' || env.RUN_MODE == 'schedule' || env.RUN_MODE == 'publish_now' || env.RUN_MODE == 'go_live' }}
         uses: actions/cache@v4
         with:
           path: ~/.cache/huggingface/hub
           key: pocket-id-6l-v35
       - name: Render MP4 menggunakan mesin Keisha yang sekarang
-        if: ${{ env.RUN_MODE == 'render' || env.RUN_MODE == 'drafts' || env.RUN_MODE == 'schedule' || env.RUN_MODE == 'go_live' }}
+        if: ${{ env.RUN_MODE == 'render' || env.RUN_MODE == 'drafts' || env.RUN_MODE == 'schedule' || env.RUN_MODE == 'publish_now' || env.RUN_MODE == 'go_live' }}
         env:
           VIDEO_VOICE: natural
           VIDEO_MUSIC: otomatis
@@ -220,7 +221,7 @@ jobs:
           cd Keisha_Video_Cloud_Starter_v1
           python render_studio.py
       - name: QC video MP4 dan audio (tidak mengunggah)
-        if: ${{ env.RUN_MODE == 'render' || env.RUN_MODE == 'drafts' || env.RUN_MODE == 'schedule' || env.RUN_MODE == 'go_live' }}
+        if: ${{ env.RUN_MODE == 'render' || env.RUN_MODE == 'drafts' || env.RUN_MODE == 'schedule' || env.RUN_MODE == 'publish_now' || env.RUN_MODE == 'go_live' }}
         run: |
           python - <<'PY'
           import json
@@ -242,15 +243,23 @@ jobs:
             --metadata Keisha_Video_Cloud_Starter_v1/hasil/metadata.json \
             --result autopilot_result.json
       - name: Pastikan video valid lalu jadwalkan SATU ke tiap channel
-        if: ${{ env.RUN_MODE == 'schedule' || env.RUN_MODE == 'go_live' }}
+        if: ${{ env.RUN_MODE == 'schedule' || env.RUN_MODE == 'publish_now' || env.RUN_MODE == 'go_live' }}
         run: |
           python autopilot/office_daily.py schedule \
             --plan autopilot_plan.json \
             --video Keisha_Video_Cloud_Starter_v1/hasil/keisha-rcd-video.mp4 \
             --metadata Keisha_Video_Cloud_Starter_v1/hasil/metadata.json \
             --result autopilot_result.json
+      - name: Kirim video sekali melalui Buffer Publish Now (khusus hari tanpa receipt)
+        if: ${{ env.RUN_MODE == 'publish_now' }}
+        run: |
+          python autopilot/office_daily.py publish_now \\
+            --plan autopilot_plan.json \\
+            --video Keisha_Video_Cloud_Starter_v1/hasil/keisha-rcd-video.mp4 \\
+            --metadata Keisha_Video_Cloud_Starter_v1/hasil/metadata.json \\
+            --result autopilot_result.json
       - name: Catat hasil kerja berdasarkan video QC dan ID jadwal Buffer
-        if: ${{ always() && (env.RUN_MODE == 'schedule' || env.RUN_MODE == 'go_live') }}
+        if: ${{ always() && (env.RUN_MODE == 'schedule' || env.RUN_MODE == 'publish_now' || env.RUN_MODE == 'go_live') }}
         run: |
           if [[ -f autopilot_plan.json && -f Keisha_Video_Cloud_Starter_v1/hasil/metadata.json ]]; then
             python - <<'PY'
@@ -282,7 +291,7 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: python autopilot/office_daily.py activate --result autopilot_result.json
       - name: Laporkan kegagalan satu kali tanpa retry posting
-        if: ${{ failure() && (env.RUN_MODE == 'schedule' || env.RUN_MODE == 'go_live' || env.RUN_MODE == 'recover_tiktok') }}
+        if: ${{ failure() && (env.RUN_MODE == 'schedule' || env.RUN_MODE == 'publish_now' || env.RUN_MODE == 'go_live' || env.RUN_MODE == 'recover_tiktok') }}
         run: python autopilot/office_daily.py report_failure
       - name: Simpan laporan dan hasil produksi
         if: always()
