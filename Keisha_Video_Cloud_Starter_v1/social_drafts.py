@@ -232,19 +232,21 @@ def guard_daily_channel_posts(token, channel_id, day, *, max_pages=30):
                 if str(post.get("channelId")) != str(channel_id):
                     continue
                 status = str(post.get("status") or "").lower()
-                # 'sent' posts may have been scheduled earlier; createdAt is
-                # deliberately conservative only for same-day creations.
-                timestamp = post.get("dueAt") if status == "scheduled" else post.get("createdAt")
-                if not timestamp:
+                # Check both creation and scheduled delivery timestamps; a
+                # sent post may have been created on the previous date.
+                timestamps = [t for t in (post.get("createdAt"), post.get("dueAt")) if t]
+                if not timestamps:
                     raise RuntimeError("Tanggal posting Buffer hilang. Jangan mengambil risiko duplikat.")
                 try:
-                    instant = datetime.fromisoformat(str(timestamp).replace("Z", "+00:00"))
-                    if instant.tzinfo is None:
-                        raise ValueError("Timezone missing")
-                    local_day = instant.astimezone(jakarta).date()
+                    local_days = set()
+                    for timestamp in timestamps:
+                        instant = datetime.fromisoformat(str(timestamp).replace("Z", "+00:00"))
+                        if instant.tzinfo is None:
+                            raise ValueError("Timezone missing")
+                        local_days.add(instant.astimezone(jakarta).date())
                 except ValueError:
                     raise RuntimeError("Tanggal posting Buffer tidak valid.") from None
-                if local_day == target and post.get("id"):
+                if target in local_days and post.get("id"):
                     matched[post["id"]] = status
             page = posts.get("pageInfo") or {}
             if not page.get("hasNextPage"):
