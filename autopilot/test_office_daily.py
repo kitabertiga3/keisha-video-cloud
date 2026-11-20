@@ -673,6 +673,86 @@ class Tests(TestCase):
         save.assert_not_called()
         upload.assert_not_called()
 
+
+    def test_go_live_receipt_requires_three_confirmed_posts(self):
+        from pathlib import Path
+        from tempfile import TemporaryDirectory
+        import json
+        from unittest.mock import patch
+        with TemporaryDirectory() as d:
+            result=Path(d)/'result.json'
+            payload={'date':'2026-11-20','status':'scheduled','errors':[],
+                'posts':{p:{'id':p+'-post-id','status':'scheduled'}
+                         for p in ('tiktok','facebook','youtube')},
+                'due_at_utc':'2026-11-20T12:00:00+00:00'}
+            result.write_text(json.dumps(payload))
+            with patch.object(m,'datetime') as clock:
+                clock.now.return_value.date.return_value=date(2026,11,20)
+                receipt=m.validated_schedule_receipt(result)
+            self.assertFalse(receipt['published'])
+            self.assertEqual(set(receipt['posts']),{'tiktok','facebook','youtube'})
+            del payload['posts']['facebook']
+            result.write_text(json.dumps(payload))
+            with patch.object(m,'datetime') as clock:
+                clock.now.return_value.date.return_value=date(2026,11,20)
+                with self.assertRaisesRegex(RuntimeError,'3/3'):
+                    m.validated_schedule_receipt(result)
+
+    def test_go_live_activation_only_after_verified_receipt(self):
+        from unittest.mock import patch
+        from pathlib import Path
+        verified={'date':'2026-11-20','posts':{},'status':'scheduled'}
+        with patch.object(m,'validated_schedule_receipt',return_value=verified), \
+             patch.object(m,'_github_put_new_file') as write, \
+             patch.object(m,'telegram_report') as report:
+            m.activate_daily_autopilot(Path('unused.json'))
+        write.assert_called_once()
+        self.assertEqual(write.call_args.args[0],m.AUTOPILOT_FLAG)
+        self.assertTrue(write.call_args.args[1]['enabled'])
+        report.assert_called_once()
+        with patch.object(m,'validated_schedule_receipt',
+                 side_effect=RuntimeError('not complete')), \
+             patch.object(m,'_github_put_new_file') as write:
+            with self.assertRaises(RuntimeError):
+                m.activate_daily_autopilot(Path('unused.json'))
+        write.assert_not_called()
+
+    def test_headquarters_reporting_preflight_checks_chat_and_token(self):
+        from unittest.mock import patch
+        with patch.dict('os.environ', {'RUN_MODE':'go_live',
+             'TELEGRAM_KEISHA_TOKEN':'bot-test',
+             'TELEGRAM_CHAT_ID':'-old-group'}):
+            with self.assertRaisesRegex(RuntimeError, 'AI AFFILIATE OFFICE'):
+                m.check_reporting_ready()
+        with patch.dict('os.environ', {'RUN_MODE':'go_live',
+             'TELEGRAM_KEISHA_TOKEN':'bot-test',
+             'TELEGRAM_CHAT_ID':m.HEADQUARTERS_CHAT_ID}):
+            with patch('pathlib.Path.is_file',return_value=False):
+                m.check_reporting_ready()
+
+    def test_one_click_workflow_is_gated_and_has_report_receipt(self):
+        from pathlib import Path
+        w=(Path(__file__).resolve().parents[1]/'.github'/
+           'workflows'/'keisha_autopilot.yml').read_text(encoding='utf-8')
+        self.assertIn('          - go_live',w)
+        self.assertIn('    needs: guard',w)
+        self.assertIn("needs.guard.outputs.allowed == 'true'",w)
+        self.assertIn('keisha-autopilot.enabled.json',w)
+        self.assertIn('python autopilot/office_daily.py check_reporting',w)
+        self.assertIn('python autopilot/office_daily.py record',w)
+        self.assertIn('python autopilot/office_daily.py activate',w)
+        self.assertIn('RUN_MODE == ',w)
+
+    def test_daily_verification_does_not_publish(self):
+        from pathlib import Path
+        v=(Path(__file__).resolve().parents[1]/'.github'/
+           'workflows'/'keisha_verify.yml').read_text(encoding='utf-8')
+        self.assertIn('python autopilot/office_daily.py verify',v)
+        self.assertNotIn(' office_daily.py schedule',v)
+        self.assertNotIn(' office_daily.py drafts',v)
+        self.assertIn('keisha-autopilot.enabled.json',v)
+        self.assertIn('Keisha-Publication-Verification',v)
+
     def test_cannot_invent_ai(self):
         from unittest.mock import patch
         with patch.dict('os.environ', {'CLOUDFLARE_AI_API_TOKEN':'','CLOUDFLARE_ACCOUNT_ID':''}):
