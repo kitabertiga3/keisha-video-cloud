@@ -110,22 +110,81 @@ def upload(video, run_id):
         raise RuntimeError("Cloudinary tidak mengembalikan URL MP4 publik yang benar.")
     return url
 
-def save_draft(token, channel_id, url, text):
-    # saveToDraft: true guarantees no scheduling or publication via this mutation.
+def draft_metadata(platform, title=""):
+    """Required Buffer GraphQL per-platform fields, from official API schema."""
+    if platform == "tiktok":
+        return ""
+    if platform == "facebook":
+        return "metadata: {facebook: {type: reel}}, "
+    if platform == "youtube":
+        title = str(title).strip()
+        if not title or len(title) > 100:
+            raise ValueError("Judul YouTube wajib ada (1-100 karakter).")
+        return ("metadata: {youtube: {title: " + json.dumps(title, ensure_ascii=False)
+                + ', categoryId: "27", isAiGenerated: true, madeForKids: false, privacy: public}}, ')
+    raise ValueError("Platform draf tidak dikenali.")
+
+
+def save_draft(token, channel_id, url, text, *, platform="tiktok", title=""):
+    # saveToDraft: true is required; never schedule or publish in draft mode.
+    metadata = draft_metadata(platform, title)
     q = ("mutation { createPost(input: {"
          f"text: {json.dumps(text, ensure_ascii=False)}, "
          f"channelId: {json.dumps(channel_id)}, schedulingType: automatic, "
          "mode: addToQueue, saveToDraft: true, "
+         + metadata +
          f"assets: [{{video: {{url: {json.dumps(url)}}}}}]"
          "}) { ... on PostActionSuccess { post { id status } } ... on MutationError { message } } }")
     result = graphql(token, q).get("createPost") or {}
     post = result.get("post") or {}
     post_id = post.get("id")
     if not post_id:
-        raise RuntimeError("Tidak berhasil menyimpan draf Buffer: " + str(result.get("message", "unknown"))[:160])
+        raise RuntimeError("Buffer menolak draf " + platform + ": "
+                           + str(result.get("message", "tanpa alasan spesifik"))[:250])
     if str(post.get("status", "")).lower() != "draft":
-        raise RuntimeError("Buffer tidak mengonfirmasi status draft. Periksa akun, jangan ulang otomatis.")
+        raise RuntimeError("Buffer tidak mengonfirmasi status draft untuk " + platform +
+                           ". Periksa akun, jangan ulang otomatis.")
     return post_id
+
+
+def find_matching_posts(token, channel_id, caption_text, media_url, max_pages=30):
+    """Read only: scan channel posts before any draft write; fail closed on incomplete scans."""
+    orgs = (graphql(token, "query { account { organizations { id } } }")
+            .get("account") or {}).get("organizations") or []
+    if not orgs:
+        raise RuntimeError("Buffer tidak mengembalikan organization untuk pemeriksaan draf.")
+    matches = {}
+    for org in orgs:
+        after = None
+        visited = set()
+        for _ in range(max_pages):
+            params = f"first: 50, input: {{organizationId: {json.dumps(org['id'])}, filter: {{channelIds: [{json.dumps(channel_id)}]}}}}"
+            if after:
+                params = "after: " + json.dumps(after) + ", " + params
+            result = graphql(token, "query { posts(" + params + ") { edges { node { id text status channelId assets { source } } } pageInfo { hasNextPage endCursor } } }")
+            posts = result.get("posts")
+            if not isinstance(posts, dict):
+                raise RuntimeError("Buffer tidak mengembalikan daftar posts; pemeriksaan duplikat dibatalkan.")
+            for item in posts.get("edges") or []:
+                post = (item or {}).get("node") or {}
+                if str(post.get("channelId")) != str(channel_id):
+                    continue
+                same_text = str(post.get("text") or "").strip() == caption_text.strip()
+                same_media = any(media_url == (asset or {}).get("source") for asset in (post.get("assets") or []))
+                if (same_text or same_media) and post.get("id"):
+                    matches[post["id"]] = {"id": post["id"], "status": post.get("status")}
+            page = posts.get("pageInfo") or {}
+            if not page.get("hasNextPage"):
+                break
+            cursor = page.get("endCursor")
+            if not cursor or cursor in visited:
+                raise RuntimeError("Buffer pagination tidak konsisten; hentikan untuk mencegah draf ganda.")
+            visited.add(cursor)
+            after = cursor
+        else:
+            raise RuntimeError("Terlalu banyak halaman Buffer; pemeriksaan duplikat belum lengkap.")
+    return list(matches.values())
+
 
 def main():
     p = argparse.ArgumentParser()

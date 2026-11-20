@@ -7,17 +7,24 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: 'check = tes kode, preflight = cek koneksi, plan = naskah, render = MP4, drafts = draf tanpa posting, schedule = posting'
+        description: 'check = tes, preflight = koneksi, audit_drafts = cek draf lama tanpa menulis, recover_drafts = draf FB/YT saja, plan/render/drafts/schedule'
         required: true
         default: check
         type: choice
         options:
           - check
           - preflight
+          - audit_drafts
+          - recover_drafts
           - plan
           - render
           - drafts
           - schedule
+      failed_drafts_run_id:
+        description: 'Hasil gagal #16; audit/recover hanya menggunakan video lama'
+        required: false
+        default: '44649510786'
+        type: string
       source_plan_run_id:
         description: 'Untuk render/drafts: naskah sukses #11 (kosong = buat baru)'
         required: false
@@ -59,6 +66,28 @@ jobs:
       - name: Periksa channel Buffer tanpa mengirim posting (preflight)
         if: ${{ env.RUN_MODE == 'preflight' || env.RUN_MODE == 'drafts' }}
         run: python autopilot/office_daily.py preflight --result autopilot_result.json
+      - name: Ambil laporan draf gagal sebelumnya (tidak upload ulang video)
+        if: ${{ env.RUN_MODE == 'audit_drafts' || env.RUN_MODE == 'recover_drafts' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: Keisha-Autopilot-Report
+          run-id: ${{ inputs.failed_drafts_run_id }}
+          github-token: ${{ github.token }}
+          path: failed_run
+      - name: Audit draf Buffer sebelumnya (hanya baca)
+        if: ${{ env.RUN_MODE == 'audit_drafts' }}
+        run: |
+          python autopilot/office_daily.py audit_drafts \
+            --plan failed_run/autopilot_plan.json \
+            --previous-result failed_run/autopilot_result.json \
+            --result autopilot_result.json
+      - name: Pulihkan draf Facebook/YouTube dari video sebelumnya (TIDAK posting)
+        if: ${{ env.RUN_MODE == 'recover_drafts' }}
+        run: |
+          python autopilot/office_daily.py recover_drafts \
+            --plan failed_run/autopilot_plan.json \
+            --previous-result failed_run/autopilot_result.json \
+            --result autopilot_result.json
       - name: Ambil naskah AI yang sudah sukses (khusus render)
         if: ${{ (env.RUN_MODE == 'render' || env.RUN_MODE == 'drafts') && inputs.source_plan_run_id != '' }}
         uses: actions/download-artifact@v4
