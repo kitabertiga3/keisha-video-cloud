@@ -786,9 +786,56 @@ class Tests(TestCase):
         yaml=(Path(__file__).resolve().parents[1]/'.github'/
               'workflows'/'keisha_autopilot.yml').read_text('utf-8')
         self.assertIn('          - recover_tiktok',yaml)
-        self.assertIn('run-id: ${{ inputs.failed_schedule_run_id }}',yaml)
-        self.assertIn('path: run21',yaml)
+        self.assertIn('python autopilot/office_daily.py prepare_recovery',yaml)
+        self.assertIn('autopilot/recovery/2026-11-20-run21.json',yaml)
+        self.assertNotIn('run-id: ${{ inputs.failed_schedule_run_id }}',yaml)
         self.assertIn('python autopilot/office_daily.py recover_tiktok',yaml)
+
+    def test_manifest_restores_original_without_github_artifact(self):
+        import hashlib, io, json, tempfile
+        from pathlib import Path
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as temp:
+            home=Path(temp);video=b'dummy immutable source MP4'
+            source='https://res.cloudinary.com/test/video/upload/v1/keisha-autopilot/original.mp4'
+            plan=self.plan();plan['date']='2026-11-20'
+            metadata={'headings':plan['headings'],'bodies':plan['bodies'],'cta':plan['cta']}
+            manifest={'video_url':source,'source_sha256':hashlib.sha256(video).hexdigest(),
+                      'source_bytes':len(video),'plan':plan,
+                      'previous_result':{'date':plan['date'],'cloudinary_url':source},
+                      'metadata':metadata}
+            path=home/'source.json';path.write_text(json.dumps(manifest))
+            response=io.BytesIO(video)
+            response.status=200
+            with patch.object(m.urllib.request,'urlopen',return_value=response):
+                answer=m.prepare_recovery_from_manifest(path,home/'run21')
+            self.assertEqual(answer['sha256'],manifest['source_sha256'])
+            self.assertEqual((home/'run21'/'Keisha_Video_Cloud_Starter_v1'/
+                 'hasil'/'keisha-rcd-video.mp4').read_bytes(),video)
+            self.assertEqual(json.loads((home/'run21'/'autopilot_plan.json').read_text())['date'],
+                 '2026-11-20')
+
+    def test_manifest_rejects_mismatched_video_before_scheduling(self):
+        import io, hashlib, json, tempfile
+        from pathlib import Path
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as temp:
+            home=Path(temp)
+            plan=self.plan();plan['date']='2026-11-20'
+            url='https://res.cloudinary.com/test/video/upload/v1/demo.mp4'
+            payload={'video_url':url,'source_sha256':hashlib.sha256(b'original').hexdigest(),
+                'source_bytes':len(b'original'),'plan':plan,
+                'previous_result':{'date':plan['date'],'cloudinary_url':url},
+                'metadata':{'headings':plan['headings'],
+                            'bodies':plan['bodies'],'cta':plan['cta']}}
+            path=home/'source.json';path.write_text(json.dumps(payload))
+            response=io.BytesIO(b'not the original');response.status=200
+            with patch.object(m.urllib.request,'urlopen',return_value=response):
+                with self.assertRaisesRegex(RuntimeError,'tidak identik'):
+                    m.prepare_recovery_from_manifest(path,home/'run21')
+            self.assertFalse((home/'run21'/'Keisha_Video_Cloud_Starter_v1'/
+                 'hasil'/'keisha-rcd-video.mp4').exists())
+
     def test_cannot_invent_ai(self):
         from unittest.mock import patch
         with patch.dict('os.environ', {'CLOUDFLARE_AI_API_TOKEN':'','CLOUDFLARE_ACCOUNT_ID':''}):
