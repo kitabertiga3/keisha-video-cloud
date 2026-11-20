@@ -159,6 +159,12 @@ jobs:
       - name: AI menyusun naskah dan strategi (mode plan/schedule/render baru)
         if: ${{ env.RUN_MODE == 'plan' || env.RUN_MODE == 'schedule' || env.RUN_MODE == 'go_live' || ((env.RUN_MODE == 'render' || env.RUN_MODE == 'drafts') && inputs.source_plan_run_id == '') }}
         run: python autopilot/office_daily.py plan --plan autopilot_plan.json
+      - name: Catat penugasan tim AI Office berdasarkan naskah nyata
+        if: ${{ env.RUN_MODE == 'schedule' || env.RUN_MODE == 'go_live' }}
+        run: |
+          python autopilot/team_ops.py planned \
+            --plan autopilot_plan.json \
+            --output ai_office_team_status.json
       - name: Siapkan FFmpeg dan FFprobe untuk suara serta MP4
         if: ${{ env.RUN_MODE == 'render' || env.RUN_MODE == 'drafts' || env.RUN_MODE == 'schedule' || env.RUN_MODE == 'go_live' }}
         run: |
@@ -230,6 +236,22 @@ jobs:
             --video Keisha_Video_Cloud_Starter_v1/hasil/keisha-rcd-video.mp4 \
             --metadata Keisha_Video_Cloud_Starter_v1/hasil/metadata.json \
             --result autopilot_result.json
+      - name: Catat hasil kerja berdasarkan video QC dan ID jadwal Buffer
+        if: ${{ always() && (env.RUN_MODE == 'schedule' || env.RUN_MODE == 'go_live') }}
+        run: |
+          if [[ -f autopilot_plan.json && -f autopilot_result.json && -f Keisha_Video_Cloud_Starter_v1/hasil/metadata.json ]]; then
+            python - <<'PY'
+          import json
+          from pathlib import Path
+          from autopilot.team_ops import build_record
+          plan=json.loads(Path('autopilot_plan.json').read_text(encoding='utf-8'))
+          meta=json.loads(Path('Keisha_Video_Cloud_Starter_v1/hasil/metadata.json').read_text(encoding='utf-8'))
+          result=json.loads(Path('autopilot_result.json').read_text(encoding='utf-8'))
+          record=build_record(plan=plan, metadata=meta, post_result=result)
+          Path('ai_office_team_status.json').write_text(json.dumps(record,ensure_ascii=False,indent=2),encoding='utf-8')
+          print('Status AI Office:',record['stage'])
+          PY
+          fi
       - name: Simpan receipt jadwal Buffer yang terverifikasi (3/3)
         if: ${{ env.RUN_MODE == 'schedule' || env.RUN_MODE == 'go_live' || env.RUN_MODE == 'recover_tiktok' }}
         env:
@@ -251,6 +273,7 @@ jobs:
           path: |
             autopilot_plan.json
             autopilot_result.json
+            ai_office_team_status.json
             Keisha_Video_Cloud_Starter_v1/hasil/keisha-rcd-video.mp4
             Keisha_Video_Cloud_Starter_v1/hasil/metadata.json
           if-no-files-found: ignore
