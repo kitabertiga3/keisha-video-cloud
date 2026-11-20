@@ -369,6 +369,7 @@ class Tests(TestCase):
 
     def test_existing_daily_media_never_creates_duplicate_buffer_posts(self):
         import json
+        import sys
         from pathlib import Path
         from tempfile import TemporaryDirectory
         from unittest.mock import patch
@@ -378,7 +379,8 @@ class Tests(TestCase):
         meta = {key:plan[key] for key in ('headings','bodies','cta')}
         with TemporaryDirectory() as directory:
             output = Path(directory) / 'schedule_result.json'
-            with patch.object(social, 'validate_metadata', return_value=meta), \
+            with patch.dict(sys.modules, {'social_drafts': social}), \
+                 patch.object(social, 'validate_metadata', return_value=meta), \
                  patch.object(social, 'validate_video', return_value={'seconds': 34}), \
                  patch.object(social, 'get_channels', return_value={'tiktok':'a','facebook':'b','youtube':'c'}), \
                  patch.object(social, 'save_scheduled_post') as scheduled, \
