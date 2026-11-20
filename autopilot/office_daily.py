@@ -409,6 +409,66 @@ def upload_daily_once(video: Path, day: str) -> str:
     return url
 
 
+def drafts_all(plan: dict, video: Path, metadata: Path, result_path: Path) -> dict:
+    """Store up to 3 Buffer drafts, never schedule or publish.
+
+    Use one deterministic Cloudinary resource per calendar date as a guard
+    against accidentally duplicating a partly completed run. When something
+    fails after upload, do not retry automatically: inspect Buffer manually.
+    """
+    base = Path(__file__).resolve().parents[1]
+    if str(base) not in sys.path:
+        sys.path.insert(0, str(base))
+    from Keisha_Video_Cloud_Starter_v1 import social_drafts as s
+
+    checked = normalize_saved_plan(plan)
+    if any(plan.get(key) != checked[key] for key in ('headings','bodies','cta','captions')):
+        raise ValueError('Rencana belum dinormalisasi; jangan unggah video lama yang berisi URL.')
+    day = date.fromisoformat(plan['date'])
+    metadata_data = s.validate_metadata(metadata)
+    verified_video = s.validate_video(video, metadata_data)
+    if (metadata_data['headings'] != checked['headings']
+            or metadata_data['bodies'] != checked['bodies']
+            or metadata_data['cta'] != checked['cta']):
+        raise ValueError('Metadata video tidak cocok dengan naskah AI. Upload dibatalkan.')
+
+    token = os.environ.get('BUFFER_API_KEY','').strip()
+    if not token:
+        raise RuntimeError('BUFFER_API_KEY belum tersedia; draf tidak dibuat.')
+    channels = s.get_channels(token)
+    if set(channels) != {'tiktok','facebook','youtube'}:
+        raise RuntimeError('Tiga channel Buffer belum lengkap; draf tidak dibuat.')
+
+    # Identitas harian, bukan GitHub Run ID; rerun hari yang sama tak buat draf ulang.
+    daily_id = int(day.strftime('%Y%m%d'))
+    output = {'date': day.isoformat(), 'status': 'pending', 'mode': 'drafts',
+              'published': False, 'scheduled': False, 'video': verified_video,
+              'drafts': {}, 'errors': []}
+    def persist() -> None:
+        result_path.parent.mkdir(parents=True, exist_ok=True)
+        result_path.write_text(json.dumps(output, indent=2, ensure_ascii=False), encoding='utf-8')
+
+    # Only this step uploads the verified MP4 to public Cloudinary media hosting.
+    url = s.upload(video, daily_id)
+    output['cloudinary_url'] = url
+    persist()
+    for platform in ('tiktok', 'facebook', 'youtube'):
+        try:
+            pid = s.save_draft(token, channels[platform], url, checked['captions'][platform])
+            output['drafts'][platform] = {'id': pid, 'status': 'draft'}
+        except Exception as err:
+            output['errors'].append({'platform': platform, 'error': type(err).__name__})
+        finally:
+            persist()
+
+    output['status'] = 'drafts_created' if len(output['drafts']) == 3 else 'manual_review'
+    persist()
+    if output['errors']:
+        raise RuntimeError('Sebagian draf gagal; lihat artifact. '
+                           'Jangan ulangi workflow otomatis agar draf tidak ganda.')
+    return output
+
+
 def preflight_connections() -> dict:
     """Read-only checks before any real posting is enabled.
 
@@ -439,7 +499,7 @@ def preflight_connections() -> dict:
 
 def main():
     p=argparse.ArgumentParser()
-    p.add_argument('action',choices=('plan','preflight','schedule','report_failure'))
+    p.add_argument('action',choices=('plan','preflight','drafts','schedule','report_failure'))
     p.add_argument('--plan',default='autopilot_plan.json')
     p.add_argument('--video',default='Keisha_Video_Cloud_Starter_v1/hasil/keisha-rcd-video.mp4')
     p.add_argument('--metadata',default='Keisha_Video_Cloud_Starter_v1/hasil/metadata.json')
@@ -455,6 +515,11 @@ def main():
         Path(args.result).write_text(json.dumps(status, ensure_ascii=False, indent=2), encoding='utf-8')
         print('PRE-FLIGHT BACA SAJA: tiga channel Buffer tersedia; '
               'Cloudinary credentials ada. Tidak ada posting atau upload.')
+    elif args.action=='drafts':
+        plan=json.loads(Path(args.plan).read_text(encoding='utf-8'))
+        result=drafts_all(plan, Path(args.video), Path(args.metadata), Path(args.result))
+        print('Berhasil menyiapkan', len(result['drafts']), 'DRAF di Buffer. '
+              'Tidak ada jadwal atau posting yang dibuat.')
     elif args.action=='schedule':
         plan=json.loads(Path(args.plan).read_text(encoding='utf-8'))
         if plan.get('date')!=datetime.now(WIB).date().isoformat():
