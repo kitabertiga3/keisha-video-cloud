@@ -112,14 +112,12 @@ jobs:
       - name: Pastikan laporan Telegram kantor siap sebelum auto scheduling
         if: ${{ env.RUN_MODE == 'go_live' || env.RUN_MODE == 'schedule' || env.RUN_MODE == 'recover_tiktok' }}
         run: python autopilot/office_daily.py check_reporting
-      - name: Ambil MP4 dan laporan Run #21 untuk pemulihan TIKTOK SAJA
+      - name: Pulihkan naskah dan MP4 Run #21 dari Cloudinary yang terverifikasi (tanpa artifact lama)
         if: ${{ env.RUN_MODE == 'recover_tiktok' }}
-        uses: actions/download-artifact@v4
-        with:
-          name: Keisha-Autopilot-Report
-          run-id: ${{ inputs.failed_schedule_run_id }}
-          github-token: ${{ github.token }}
-          path: run21
+        run: |
+          python autopilot/office_daily.py prepare_recovery \
+            --recovery-manifest autopilot/recovery/2026-11-20-run21.json \
+            --recovery-dir run21
       - name: Siapkan FFmpeg dan Cloudinary untuk pemulihan TikTok
         if: ${{ env.RUN_MODE == 'recover_tiktok' }}
         run: |
