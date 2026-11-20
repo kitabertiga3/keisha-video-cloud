@@ -353,7 +353,8 @@ def schedule_all(plan: dict, video: Path, metadata: Path, run_id: int, result_pa
     import social_drafts as s
     m = s.validate_metadata(metadata)
     video_info = s.validate_video(video, m)
-    if m['headings'] != plan['headings'] or m['bodies'] != plan['bodies']:
+    if (m['headings'] != plan['headings'] or m['bodies'] != plan['bodies']
+            or m['cta'] != plan['cta']):
         raise ValueError('Metadata video tidak cocok dengan naskah AI yang disetujui.')
     if not os.getenv('BUFFER_API_KEY'):
         raise RuntimeError('BUFFER_API_KEY belum tersedia.')
@@ -364,21 +365,21 @@ def schedule_all(plan: dict, video: Path, metadata: Path, run_id: int, result_pa
     outcome = {'date': plan['date'], 'video': video_info, 'status': 'partial',
                'due_at_utc': when.isoformat(), 'cloudinary_url': url, 'posts': {}, 'errors': []}
     for service in ('tiktok','facebook','youtube'):
-        q = ('mutation { createPost(input: {'
-             f'text: {json.dumps(plan["captions"][service], ensure_ascii=False)}, '
-             f'channelId: {json.dumps(channels[service])}, '
-             'schedulingType: automatic, mode: customScheduled, '
-             f'dueAt: {json.dumps(when.strftime("%Y-%m-%dT%H:%M:%S.000Z"))}, '
-             f'assets: [{{video: {{url: {json.dumps(url)}}}}}]'
-             '}) { ... on PostActionSuccess { post { id dueAt status } } '
-             '... on MutationError { message } } }')
         try:
-            o = s.graphql(os.environ['BUFFER_API_KEY'], q).get('createPost') or {}
-            pid = (o.get('post') or {}).get('id')
-            if not pid: raise RuntimeError(str(o.get('message','Buffer menolak jadwal'))[:180])
-            outcome['posts'][service] = {'id': pid, 'state': (o.get('post') or {}).get('status')}
-        except Exception as e:
-            outcome['errors'].append({'platform':service,'error':type(e).__name__})
+            post = s.save_scheduled_post(
+                os.environ['BUFFER_API_KEY'], channels[service], url,
+                plan['captions'][service], platform=service,
+                title=plan['headings'][0],
+                due_at=when.strftime('%Y-%m-%dT%H:%M:%S.000Z'))
+            outcome['posts'][service] = post
+        except Exception as exc:
+            outcome['errors'].append({'platform':service, 'error':type(exc).__name__,
+                                      'detail':str(exc)[:220]})
+        finally:
+            # Durable partial record before any subsequent platform mutation.
+            result_path.parent.mkdir(parents=True, exist_ok=True)
+            result_path.write_text(json.dumps(outcome, indent=2, ensure_ascii=False),
+                                   encoding='utf-8')
     outcome['status'] = 'scheduled' if len(outcome['posts']) == 3 else 'manual_review'
     result_path.parent.mkdir(parents=True,exist_ok=True)
     result_path.write_text(json.dumps(outcome,indent=2,ensure_ascii=False),encoding='utf-8')
@@ -575,10 +576,14 @@ def audit_live_drafts(audit_date: str, known_tiktok_draft_id: str = '') -> dict:
                        else 'not_verified')}
     if known_tiktok_draft_id:
         post = s.read_post_by_id(token, known_tiktok_draft_id)
-        if str(post['channel_id']) != str(channels['tiktok']):
-            raise RuntimeError('ID draf TikTok tidak sesuai dengan channel TikTok.')
         output['known_tiktok_draft'] = post
-        output['channels']['tiktok']['status'] = 'confirmed_by_post_id'
+        if post.get('reachable', True):
+            if str(post.get('channel_id')) != str(channels['tiktok']):
+                raise RuntimeError('ID draf lama ternyata milik channel lain.')
+            output['channels']['tiktok']['status'] = 'confirmed_by_post_id'
+        else:
+            # Record missing ID, never assume permission to create a replacement.
+            output['channels']['tiktok']['known_id_status'] = post['status']
     output['status'] = 'complete_read_only'
     return output
 
