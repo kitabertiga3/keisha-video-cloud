@@ -336,6 +336,36 @@ class Tests(TestCase):
         self.assertIn('normalize_saved_plan(json.loads(', workflow)
         self.assertIn('path.write_text(json.dumps(plan, ensure_ascii=False, indent=2)', workflow)
 
+    def test_preflight_requires_cloudinary_config_before_buffer_calls(self):
+        from unittest.mock import patch
+        with patch.dict('os.environ', {'BUFFER_API_KEY':'test','CLOUDINARY_CLOUD_NAME':'',
+                'CLOUDINARY_API_KEY':'','CLOUDINARY_API_SECRET':''}):
+            with self.assertRaisesRegex(RuntimeError, 'CLOUDINARY'):
+                m.preflight_connections()
+
+    def test_preflight_calls_read_only_channel_discovery(self):
+        from unittest.mock import patch
+        env = {'BUFFER_API_KEY':'test','CLOUDINARY_CLOUD_NAME':'test',
+               'CLOUDINARY_API_KEY':'test','CLOUDINARY_API_SECRET':'test',
+               'TELEGRAM_KEISHA_TOKEN':'test','TELEGRAM_CHAT_ID':'-1234'}
+        with patch.dict('os.environ', env):
+            with patch('Keisha_Video_Cloud_Starter_v1.social_drafts.get_channels',
+                       return_value={'tiktok':'a','facebook':'b','youtube':'c'}) as channels:
+                out=m.preflight_connections()
+        self.assertEqual(out['buffer_channels'], ['facebook','tiktok','youtube'])
+        self.assertTrue(out['ready_to_test_drafts'])
+        self.assertTrue(out['telegram_reporting_config_present'])
+        channels.assert_called_once_with('test')
+
+    def test_workflow_preflight_does_not_generate_or_schedule(self):
+        from pathlib import Path
+        text = (Path(__file__).resolve().parents[1] /
+                '.github' / 'workflows' / 'keisha_autopilot.yml').read_text(encoding='utf-8')
+        self.assertIn('          - preflight', text)
+        self.assertIn("if: ${{ env.RUN_MODE == 'preflight' }}", text)
+        self.assertIn("if: ${{ env.RUN_MODE == 'schedule' }}", text)
+        self.assertIn("if: ${{ env.RUN_MODE == 'plan' || env.RUN_MODE == 'schedule' || (env.RUN_MODE == 'render' && inputs.source_plan_run_id == '') }}", text)
+
     def test_cannot_invent_ai(self):
         from unittest.mock import patch
         with patch.dict('os.environ', {'CLOUDFLARE_AI_API_TOKEN':'','CLOUDFLARE_ACCOUNT_ID':''}):
