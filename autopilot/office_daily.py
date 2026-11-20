@@ -726,6 +726,129 @@ def verify_daily_publication() -> dict:
             'published_confirmed':all(v=='sent' for v in statuses.values())}
 
 
+def recover_tiktok_run21(plan_path: Path, prior_result_path: Path,
+                         video_path: Path, metadata_path: Path,
+                         result_path: Path) -> dict:
+    """Recover the one missing TikTok slot of Run #21. Never touch FB/YouTube.
+
+    Fail closed if any prior scheduled post is not verifiable, TikTok might
+    already be scheduled, Cloudinary recovery asset already exists, or date
+    differs. No automatic retries of a partially successful request.
+    """
+    import subprocess
+    import cloudinary
+    import cloudinary.api
+    import cloudinary.uploader
+    base = Path(__file__).resolve().parents[1] / 'Keisha_Video_Cloud_Starter_v1'
+    if str(base) not in sys.path:
+        sys.path.insert(0, str(base))
+    import social_drafts as sd
+
+    day = datetime.now(WIB).date()
+    plan = json.loads(plan_path.read_text(encoding='utf-8'))
+    prior = json.loads(prior_result_path.read_text(encoding='utf-8'))
+    checked = normalize_saved_plan(plan)
+    if plan.get('date') != day.isoformat() or prior.get('date') != day.isoformat():
+        raise RuntimeError('Tanggal Run #21 bukan hari ini. Pemulihan tidak boleh dijalankan.')
+    if prior.get('status') != 'manual_review' or set(prior.get('posts',{})) != {'facebook','youtube'}:
+        raise RuntimeError('Laporan sumber bukan kegagalan parsial 2/3 yang diharapkan.')
+    if not any(x.get('platform') == 'tiktok' and
+               'frame rate' in str(x.get('detail','')).lower()
+               for x in prior.get('errors',[])):
+        raise RuntimeError('Error sumber tidak sesuai dengan masalah FPS TikTok.')
+    for platform in ('facebook','youtube'):
+        if prior['posts'][platform].get('status') != 'scheduled':
+            raise RuntimeError('Status jadwal terdahulu bukan scheduled pada ' + platform)
+    if Path(AUTOPILOT_FLAG).is_file():
+        raise RuntimeError('Autopilot sudah aktif; pemulihan manual dibatalkan.')
+
+    # Ensure future slot and known original content before making any write.
+    slot = due_at(day, plan['posting_time'])
+    metadata = sd.validate_metadata(metadata_path)
+    if (metadata['headings'] != checked['headings'] or
+            metadata['bodies'] != checked['bodies'] or
+            metadata['cta'] != checked['cta']):
+        raise RuntimeError('Metadata MP4 berbeda dari naskah Run #21.')
+    if not video_path.is_file():
+        raise RuntimeError('MP4 sumber Run #21 tidak tersedia.')
+    token = os.environ.get('BUFFER_API_KEY','').strip()
+    channels = sd.get_channels(token)
+    for platform in ('facebook','youtube'):
+        post = sd.read_post_by_id(token, prior['posts'][platform]['id'])
+        if not post.get('reachable') or post.get('status') not in ('scheduled','sent'):
+            raise RuntimeError('Jadwal lama ' + platform + ' tidak dapat diverifikasi.')
+        if str(post.get('channel_id')) != str(channels[platform]):
+            raise RuntimeError('ID jadwal lama tidak cocok dengan channel ' + platform)
+    previous_url = str(prior.get('cloudinary_url') or '')
+    if not previous_url.startswith('https://res.cloudinary.com/'):
+        raise RuntimeError('URL video Run #21 tidak valid.')
+
+    existing = sd.find_matching_posts(token, channels['tiktok'],
+                                      checked['captions']['tiktok'], previous_url)
+    if existing:
+        raise RuntimeError('TikTok mungkin sudah punya post yang sama. Tidak mengirim ulang.')
+
+    # Re-encode ONLY the pre-existing MP4, preserving the existing narration.
+    converted = result_path.parent / 'keisha-run21-tiktok-30fps.mp4'
+    subprocess.run(['ffmpeg','-hide_banner','-loglevel','error','-y',
+                    '-i',str(video_path),'-vf','fps=30,format=yuv420p',
+                    '-c:v','libx264','-preset','veryfast','-crf','24',
+                    '-c:a','copy','-movflags','+faststart',str(converted)],
+                    check=True,timeout=240)
+    info = sd.validate_video(converted,metadata)
+    if info['fps'] < 29 or info['fps'] > 31:
+        raise RuntimeError('QC video 30 FPS tidak lolos.')
+
+    required = ('CLOUDINARY_CLOUD_NAME','CLOUDINARY_API_KEY','CLOUDINARY_API_SECRET')
+    if any(not os.getenv(k) for k in required):
+        raise RuntimeError('Cloudinary credentials tidak lengkap.')
+    cloudinary.config(cloud_name=os.environ[required[0]],
+                      api_key=os.environ[required[1]],
+                      api_secret=os.environ[required[2]],secure=True)
+    asset_id = 'keisha-autopilot/' + day.isoformat() + '-tiktok-30fps'
+    try:
+        cloudinary.api.resource(asset_id, resource_type='video')
+    except cloudinary.api.NotFound:
+        pass
+    else:
+        raise RuntimeError('Video pemulihan sudah ada di Cloudinary. STOP untuk mencegah duplikat.')
+
+    output = {'date':day.isoformat(),'mode':'recover_tiktok','status':'pending',
+              'video':info,'posts':dict(prior['posts']),'errors':[],
+              'recovered_from_run_id':44657550853,
+              'due_at_utc':slot.isoformat(),'published':False}
+    result_path.parent.mkdir(parents=True,exist_ok=True)
+    result_path.write_text(json.dumps(output,indent=2,ensure_ascii=False),encoding='utf-8')
+    upload = cloudinary.uploader.upload(str(converted),resource_type='video',
+                         folder='keisha-autopilot',
+                         public_id=day.isoformat()+'-tiktok-30fps',
+                         overwrite=False,unique_filename=False)
+    url = upload.get('secure_url','')
+    if not url.startswith('https://res.cloudinary.com/') or '/video/upload/' not in url:
+        raise RuntimeError('Cloudinary belum mengonfirmasi MP4 pemulihan. Jangan ulang.')
+    output['recovery_url'] = url
+    result_path.write_text(json.dumps(output,indent=2,ensure_ascii=False),encoding='utf-8')
+    try:
+        post = sd.save_scheduled_post(token,channels['tiktok'],url,
+                        checked['captions']['tiktok'],platform='tiktok',
+                        title=checked['headings'][0],
+                        due_at=slot.strftime('%Y-%m-%dT%H:%M:%S.000Z'))
+        output['posts']['tiktok'] = post
+        output['status']='scheduled'
+    except Exception as exc:
+        output['status']='manual_review'
+        output['errors'].append({'platform':'tiktok','error':type(exc).__name__,
+                                 'detail':str(exc)[:250]})
+    finally:
+        result_path.write_text(json.dumps(output,indent=2,ensure_ascii=False),encoding='utf-8')
+    if output['errors']:
+        raise RuntimeError('TikTok recovery gagal; cek artifact, JANGAN ulang otomatis.')
+    telegram_report('✅ Keisha: TikTok sudah dijadwalkan untuk ' +plan['posting_time']+
+                    ' WIB dengan MP4 30 FPS. Facebook & YouTube tidak disentuh. '
+                    'Ini status antrean, belum konfirmasi tayang.')
+    return output
+
+
 def check_reporting_ready() -> None:
     """Fail before rendering or publishing if HQ notification cannot be routed."""
     if not os.getenv('TELEGRAM_KEISHA_TOKEN', '').strip():
@@ -741,7 +864,7 @@ def check_reporting_ready() -> None:
 
 def main():
     p=argparse.ArgumentParser()
-    p.add_argument('action',choices=('plan','preflight','drafts','audit_drafts','recover_drafts','schedule','record','activate','verify','check_reporting','report_failure'))
+    p.add_argument('action',choices=('plan','preflight','drafts','audit_drafts','recover_drafts','schedule','record','activate','verify','check_reporting','recover_tiktok','report_failure'))
     p.add_argument('--plan',default='autopilot_plan.json')
     p.add_argument('--video',default='Keisha_Video_Cloud_Starter_v1/hasil/keisha-rcd-video.mp4')
     p.add_argument('--metadata',default='Keisha_Video_Cloud_Starter_v1/hasil/metadata.json')
@@ -782,6 +905,9 @@ def main():
     elif args.action=='recover_drafts':
         raise RuntimeError('Pemulihan draf masih dinonaktifkan sampai audit langsung'
                            ' Buffer selesai dan sudah diperiksa.')
+    elif args.action=='recover_tiktok':
+        recover_tiktok_run21(Path(args.plan),Path(args.previous_result),
+                             Path(args.video),Path(args.metadata),Path(args.result))
     elif args.action=='check_reporting':
         check_reporting_ready()
     elif args.action in ('record','activate','verify'):
