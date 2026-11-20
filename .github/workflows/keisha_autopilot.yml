@@ -254,6 +254,11 @@ jobs:
         if: ${{ env.RUN_MODE == 'publish_now' }}
         run: |
           python autopilot/office_daily.py publish_now --plan autopilot_plan.json --video Keisha_Video_Cloud_Starter_v1/hasil/keisha-rcd-video.mp4 --metadata Keisha_Video_Cloud_Starter_v1/hasil/metadata.json --result autopilot_result.json
+      - name: Simpan receipt anti-duplikat setelah Publish Now 3/3
+        if: ${{ env.RUN_MODE == 'publish_now' }}
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python autopilot/office_daily.py record_now --result autopilot_result.json
       - name: Catat hasil kerja berdasarkan video QC dan ID jadwal Buffer
         if: ${{ always() && (env.RUN_MODE == 'schedule' || env.RUN_MODE == 'publish_now' || env.RUN_MODE == 'go_live') }}
         run: |
