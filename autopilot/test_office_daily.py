@@ -383,6 +383,7 @@ class Tests(TestCase):
                  patch.object(social, 'validate_metadata', return_value=meta), \
                  patch.object(social, 'validate_video', return_value={'seconds': 34}), \
                  patch.object(social, 'get_channels', return_value={'tiktok':'a','facebook':'b','youtube':'c'}), \
+                 patch.object(social, 'guard_daily_channel_posts', return_value=True), \
                  patch.object(social, 'find_matching_posts', return_value=[]), \
                  patch.object(social, 'save_scheduled_post') as scheduled, \
                  patch.object(m, 'upload_daily_once', side_effect=RuntimeError('KUNCI ANTI-SPAM: daily media exists')), \
