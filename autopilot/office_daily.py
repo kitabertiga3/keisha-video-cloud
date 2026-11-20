@@ -710,8 +710,47 @@ def activate_daily_autopilot(path: Path) -> None:
                     'Posting belum sama dengan terbit; nanti status dikonfirmasi lagi.')
 
 
+def summarize_buffer_publication(receipt: dict, reader) -> dict:
+    """Read-only verification of each exact Buffer post ID from today's receipt.
+
+    Buffer's 'sent' means delivered by Buffer, not proven live on the destination
+    platform. Unknown/missing IDs must never be reported as published.
+    """
+    expected = ('tiktok', 'facebook', 'youtube')
+    posts = receipt.get('posts')
+    if not isinstance(posts, dict):
+        posts = {}
+    statuses = {}
+    details = {}
+    for platform in expected:
+        old = posts.get(platform)
+        post_id = old.get('id') if isinstance(old, dict) else None
+        if not isinstance(post_id, str) or not post_id.strip():
+            statuses[platform] = 'missing_receipt_id'
+            details[platform] = {'status': 'missing_receipt_id', 'post_id': None}
+            continue
+        try:
+            current = reader(post_id)
+            if not isinstance(current, dict) or current.get('id') != post_id:
+                status = 'unverified'
+            else:
+                status = str(current.get('status') or 'unknown').strip().lower()
+            if status not in ('sent', 'scheduled', 'sending', 'error',
+                              'draft', 'needs_approval', 'not_found', 'unverified'):
+                status = 'unknown'
+        except Exception:
+            status = 'unverified'
+        statuses[platform] = status
+        details[platform] = {'status': status, 'post_id': post_id}
+    all_sent = all(statuses[p] == 'sent' for p in expected)
+    return {'channels': statuses, 'posts': details,
+            'buffer_all_sent': all_sent,
+            'platform_publication_verified': False,
+            'requires_manual_review': not all_sent}
+
+
 def verify_daily_publication() -> dict:
-    """Late-day one-time status report, not a second posting attempt."""
+    """Check Buffer IDs and report truthful delivery status; never post again."""
     base = Path(__file__).resolve().parents[1]
     if str(base) not in sys.path:
         sys.path.insert(0, str(base))
@@ -719,29 +758,33 @@ def verify_daily_publication() -> dict:
     day = datetime.now(WIB).date().isoformat()
     path = Path(AUTOPILOT_RECEIPT_DIR) / (day + '.json')
     if not path.is_file():
-        telegram_report('⚠️ Keisha: bukti jadwal '+day+' belum ditemukan di GitHub. '
+        telegram_report('⚠️ Keisha: bukti jadwal ' + day + ' belum ditemukan di GitHub. '
                         'Cek GitHub Actions; tidak ada posting ulang.')
-        return {'date':day,'status':'no_receipt'}
+        return {'date': day, 'status': 'no_receipt',
+                'buffer_all_sent': False, 'platform_publication_verified': False}
     receipt = json.loads(path.read_text(encoding='utf-8'))
-    token = os.getenv('BUFFER_API_KEY','').strip()
+    if receipt.get('date') != day:
+        raise RuntimeError('Tanggal receipt verifikasi tidak cocok; tidak mengklaim posting berhasil.')
+    token = os.getenv('BUFFER_API_KEY', '').strip()
     if not token:
         raise RuntimeError('Token Buffer tidak tersedia saat verifikasi.')
-    statuses = {}
-    for platform, old in receipt.get('posts',{}).items():
-        try:
-            post = s.read_post_by_id(token, old['id'])
-            statuses[platform] = post.get('status','unknown')
-        except Exception:
-            statuses[platform] = 'unverified'
-    message = ('📊 Status publikasi Keisha '+day+' (laporan Buffer):\n'
-               + '\n'.join(p.title()+': '+statuses.get(p,'belum dicek')
-                            for p in ('tiktok','facebook','youtube'))
-               + '\nStatus sent = Buffer mengonfirmasi terkirim. '
-                 'Jika masih scheduled/error, perlu dicek, tidak akan diulang.')
+    report = summarize_buffer_publication(
+        receipt, lambda post_id: s.read_post_by_id(token, post_id))
+    statuses = report['channels']
+    message = ('📊 Audit pengiriman Keisha ' + day + ' (BACA SAJA):\n'
+               + '\n'.join(p.title() + ': ' + statuses[p]
+                           for p in ('tiktok', 'facebook', 'youtube'))
+               + ('\n✅ Buffer mengonfirmasi status sent untuk 3/3. '
+                  if report['buffer_all_sent'] else
+                  '\n⚠️ Ada status belum sent/tidak terverifikasi; periksa Buffer dan akun tujuan. ')
+               + 'Sent hanya berarti Buffer mengonfirmasi pengiriman, '
+                 'BUKAN bukti video terlihat publik di platform. '
+                 'Tidak ada percobaan posting ulang otomatis.')
     telegram_report(message)
-    return {'date':day,'status':'verified','channels':statuses,
-            'published_confirmed':all(v=='sent' for v in statuses.values())}
-
+    result = {'date': day, 'status': 'buffer_sent' if report['buffer_all_sent']
+              else 'needs_review'}
+    result.update(report)
+    return result
 
 def prepare_recovery_from_manifest(manifest_path: Path, out_dir: Path) -> dict:
     """Restore Run #21 from checked-in metadata and exact original Cloudinary MP4.
