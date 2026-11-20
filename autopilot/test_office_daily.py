@@ -428,6 +428,121 @@ class Tests(TestCase):
         self.assertIn("if: ${{ env.RUN_MODE == 'schedule' }}", text[pub:end])
         self.assertNotIn("env.RUN_MODE == 'drafts'", text[pub:end])
 
+
+    def test_facebook_reel_and_youtube_required_metadata(self):
+        from Keisha_Video_Cloud_Starter_v1 import social_drafts as social
+        self.assertIn('metadata: {facebook: {type: reel}}',
+                      social.draft_metadata('facebook'))
+        yt = social.draft_metadata('youtube', 'Judul Keisha yang Edukatif')
+        self.assertIn('categoryId: "27"', yt)
+        self.assertIn('title: "Judul Keisha yang Edukatif"', yt)
+        self.assertIn('isAiGenerated: true', yt)
+        self.assertEqual(social.draft_metadata('tiktok'), '')
+        with self.assertRaisesRegex(ValueError, 'Judul YouTube'):
+            social.draft_metadata('youtube', '')
+
+    def test_buffer_query_includes_platform_metadata_and_save_to_draft(self):
+        from unittest.mock import patch
+        from Keisha_Video_Cloud_Starter_v1 import social_drafts as social
+        for platform in ('facebook', 'youtube'):
+            with self.subTest(platform=platform):
+                with patch.object(social, 'graphql', return_value={
+                    'createPost': {'post': {'id': 'p1', 'status':'draft'}}}) as query:
+                    social.save_draft('token','channel','https://res.cloudinary.com/x/video/upload/a.mp4',
+                                      'Tautan afiliasi', platform=platform, title='Video edukasi')
+                sent = query.call_args.args[1]
+                self.assertIn('saveToDraft: true', sent)
+                self.assertIn('metadata: {' + platform + ':', sent)
+                self.assertNotIn('customScheduled', sent)
+                self.assertNotIn('publishPostNow', sent)
+
+    def test_draft_audit_is_read_only_and_skips_existing_tiktok(self):
+        from unittest.mock import patch
+        from Keisha_Video_Cloud_Starter_v1 import social_drafts as social
+        plan = self.plan()
+        plan['date'] = '2026-11-20'
+        plan = m.normalize_saved_plan(plan)
+        previous = {'date':'2026-11-20','mode':'drafts',
+           'cloudinary_url':'https://res.cloudinary.com/x/video/upload/v1/keisha-drafts/run-20261120.mp4',
+           'drafts':{'tiktok':{'id':'already-saved'}}}
+        with patch.object(social,'get_channels', return_value={
+                    'tiktok':'t','facebook':'f','youtube':'y'}), \
+             patch.object(social,'find_matching_posts', side_effect=[[], []]) as scan, \
+             patch.object(social,'save_draft') as send, \
+             patch.dict('os.environ', {'BUFFER_API_KEY':'token'}):
+            output=m.reconcile_failed_drafts(plan, previous)
+        self.assertEqual(output['tiktok']['id'],'already-saved')
+        self.assertEqual(output['channels']['facebook']['action'],'missing')
+        self.assertEqual(scan.call_count, 2)
+        send.assert_not_called()
+
+    def test_recovery_skips_existing_draft_and_only_creates_missing_youtube(self):
+        from unittest.mock import patch
+        from Keisha_Video_Cloud_Starter_v1 import social_drafts as social
+        plan = self.plan()
+        plan['date']='2026-11-20'
+        plan=m.normalize_saved_plan(plan)
+        previous={'date':'2026-11-20','mode':'drafts',
+            'cloudinary_url':'https://res.cloudinary.com/x/video/upload/v1/keisha-drafts/run-20261120.mp4',
+            'drafts':{'tiktok':{'id':'original-tiktok'}}}
+        with patch.object(social,'get_channels', return_value={
+                    'tiktok':'t','facebook':'f','youtube':'y'}), \
+             patch.object(social,'find_matching_posts',side_effect=[
+                [{'id':'existing-facebook','status':'draft'}],[]]), \
+             patch.object(social,'save_draft',return_value='new-youtube') as send, \
+             patch.dict('os.environ', {'BUFFER_API_KEY':'token'}):
+            output=m.reconcile_failed_drafts(plan,previous,create_missing=True)
+        self.assertEqual(send.call_count,1)
+        self.assertEqual(send.call_args.kwargs['platform'],'youtube')
+        self.assertEqual(output['channels']['facebook']['action'],'existing')
+        self.assertEqual(output['channels']['youtube']['id'],'new-youtube')
+        self.assertEqual(output['tiktok']['action'],'untouched')
+
+    def test_buffer_scan_paginates_and_detects_existing_media(self):
+        from unittest.mock import patch
+        from Keisha_Video_Cloud_Starter_v1 import social_drafts as social
+        url = 'https://res.cloudinary.com/x/video/upload/v1/keisha-drafts/run-20261120.mp4'
+        responses = [
+            {'account':{'organizations':[{'id':'org'}]}},
+            {'posts':{'edges':[], 'pageInfo':{'hasNextPage':True,'endCursor':'next'}}},
+            {'posts':{'edges':[{'node':{'id':'found','text':'different','status':'draft',
+                  'channelId':'channel','assets':[{'source':url}]}}],
+                      'pageInfo':{'hasNextPage':False,'endCursor':'last'}}},
+        ]
+        with patch.object(social,'graphql',side_effect=responses) as req:
+            found=social.find_matching_posts('token','channel','caption',url)
+        self.assertEqual([x['id'] for x in found],['found'])
+        self.assertIn('after: "next"',req.call_args.args[1])
+
+    def test_recovery_stops_if_buffer_scan_fails_before_write(self):
+        from unittest.mock import patch
+        from Keisha_Video_Cloud_Starter_v1 import social_drafts as social
+        plan = self.plan()
+        plan['date']='2026-11-20'
+        plan=m.normalize_saved_plan(plan)
+        previous={'date':'2026-11-20','mode':'drafts',
+            'cloudinary_url':'https://res.cloudinary.com/x/video/upload/v1/keisha-drafts/run-20261120.mp4',
+            'drafts':{'tiktok':{'id':'original-tiktok'}}}
+        with patch.object(social,'get_channels',return_value={
+                    'tiktok':'t','facebook':'f','youtube':'y'}), \
+             patch.object(social,'find_matching_posts',side_effect=RuntimeError('scope tidak cukup')), \
+             patch.object(social,'save_draft') as send, \
+             patch.dict('os.environ', {'BUFFER_API_KEY':'token'}):
+            with self.assertRaisesRegex(RuntimeError,'scope tidak cukup'):
+                m.reconcile_failed_drafts(plan,previous,create_missing=True)
+        send.assert_not_called()
+
+    def test_workflow_recovery_does_not_render_or_upload(self):
+        from pathlib import Path
+        y=(Path(__file__).resolve().parents[1]/'.github/workflows/keisha_autopilot.yml')
+        source=y.read_text(encoding='utf-8')
+        self.assertIn("if: ${{ env.RUN_MODE == 'audit_drafts' }}",source)
+        self.assertIn("if: ${{ env.RUN_MODE == 'recover_drafts' }}",source)
+        self.assertIn('run-id: ${{ inputs.failed_drafts_run_id }}',source)
+        self.assertIn('python autopilot/office_daily.py audit_drafts',source)
+        self.assertIn('python autopilot/office_daily.py recover_drafts',source)
+        self.assertIn("if: ${{ env.RUN_MODE == 'schedule' }}",source)
+
     def test_cannot_invent_ai(self):
         from unittest.mock import patch
         with patch.dict('os.environ', {'CLOUDFLARE_AI_API_TOKEN':'','CLOUDFLARE_ACCOUNT_ID':''}):
