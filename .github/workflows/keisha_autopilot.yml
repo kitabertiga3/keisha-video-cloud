@@ -68,13 +68,13 @@ jobs:
           python - <<'PY'
           import json
           from pathlib import Path
-          from autopilot.office_daily import validate_plan
+          from autopilot.office_daily import normalize_saved_plan
           path = Path('autopilot_plan.json')
-          plan = json.loads(path.read_text(encoding='utf-8'))
-          validate_plan(plan)
+          plan = normalize_saved_plan(json.loads(path.read_text(encoding='utf-8')))
           if not plan.get('date') or not plan.get('theme'):
               raise ValueError('Artifact tidak punya tanggal atau tema naskah.')
-          print('Naskah dari run sebelumnya siap dirender; belum ada publikasi.')
+          path.write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding='utf-8')
+          print('Naskah lama dinormalisasi: URL pindah ke caption; video hanya menyebut bio.')
           PY
       - name: AI menyusun naskah dan strategi (mode plan/schedule/render baru)
         if: ${{ env.RUN_MODE != 'check' && (env.RUN_MODE != 'render' || inputs.source_plan_run_id == '') }}
