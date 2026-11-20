@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 from unittest import TestCase
 from unittest.mock import patch
-import employee_work as work
+from autopilot import employee_work as work
 
 class TeamWorkTests(TestCase):
     def plan(self):
