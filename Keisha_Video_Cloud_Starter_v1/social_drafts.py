@@ -188,6 +188,68 @@ def find_matching_posts(token, channel_id, caption_text, media_url, max_pages=30
     return list(matches.values())
 
 
+def read_post_by_id(token, post_id):
+    """Read the original Buffer post directly, regardless of rewritten asset URLs."""
+    if not isinstance(post_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{8,128}", post_id):
+        raise ValueError("ID draf Buffer tidak valid.")
+    q = ('query { post(input: {id: ' + json.dumps(post_id)
+         + '}) { id status channelId createdAt assets { source } } }')
+    post = graphql(token, q).get("post")
+    if not isinstance(post, dict) or post.get("id") != post_id:
+        raise RuntimeError("Buffer tidak mengonfirmasi ID draf tersebut.")
+    return {"id":post_id, "status":post.get("status"),
+            "channel_id":post.get("channelId"), "created_at":post.get("createdAt"),
+            "asset_count":len(post.get("assets") or [])}
+
+
+def summarize_channel_drafts(token, channel_id, audit_day, max_pages=15):
+    """Read-only inventory of channel drafts created on the audit date."""
+    orgs = ((graphql(token, "query { account { organizations { id } } }")
+             .get("account") or {}).get("organizations") or [])
+    if not orgs:
+        raise RuntimeError("Tidak ada organization Buffer yang dapat diaudit.")
+    candidates = {}
+    scanned = 0
+    for org in orgs:
+        after = None
+        seen = set()
+        for _ in range(max_pages):
+            query_args = ('first: 50, input: {organizationId: '
+                          + json.dumps(org["id"])
+                          + ', filter: {status: [draft], channelIds: ['
+                          + json.dumps(channel_id) + ']}}')
+            if after:
+                query_args = 'after: ' + json.dumps(after) + ', ' + query_args
+            data = graphql(token, 'query { posts(' + query_args
+                           + ') { edges { node { id status channelId createdAt } } '
+                           'pageInfo { hasNextPage endCursor } } }')
+            result = data.get("posts")
+            if not isinstance(result, dict):
+                raise RuntimeError("Buffer tidak mengembalikan inventaris draf.")
+            for edge in result.get("edges") or []:
+                post = (edge or {}).get("node") or {}
+                scanned += 1
+                created = str(post.get("createdAt") or "")
+                if (str(post.get("channelId")) == str(channel_id)
+                        and created.startswith(audit_day) and post.get("id")):
+                    candidates[post["id"]] = {"id":post["id"],
+                                               "status":post.get("status"),
+                                               "created_at":created}
+            page = result.get("pageInfo") or {}
+            if not page.get("hasNextPage"):
+                break
+            cursor = page.get("endCursor")
+            if not cursor or cursor in seen:
+                raise RuntimeError("Pagination draf Buffer tidak konsisten.")
+            seen.add(cursor)
+            after = cursor
+        else:
+            raise RuntimeError("Inventaris draf Buffer terlalu panjang untuk diverifikasi.")
+    return {"scanned":scanned,
+            "created_on_audit_date":sorted(candidates.values(),
+                 key=lambda p: p["created_at"], reverse=True)[:20]}
+
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--mode", choices=("inspect", "create_drafts"), default="inspect")
