@@ -529,7 +529,7 @@ def reconcile_failed_drafts(plan: dict, previous_result: dict, *, create_missing
     return outcome
 
 
-def audit_live_drafts(audit_date: str) -> dict:
+def audit_live_drafts(audit_date: str, known_tiktok_draft_id: str = '') -> dict:
     """Read-only audit from Cloudinary and Buffer. Never requires a GitHub artifact."""
     base = Path(__file__).resolve().parents[1]
     if str(base) not in sys.path:
@@ -566,9 +566,19 @@ def audit_live_drafts(audit_date: str) -> dict:
               'channels':{}}
     for platform in required:
         matches = s.find_matching_posts(token, channels[platform], '', url)
+        inventory = s.summarize_channel_drafts(token, channels[platform], day.isoformat())
         output['channels'][platform] = {
-            'matches': matches,
-            'status': ('found' if matches else 'not_verified')}
+            'matches_by_original_url': matches,
+            'draft_inventory': inventory,
+            'status': ('matched_url' if matches else
+                       'draft_candidates_found' if inventory['created_on_audit_date']
+                       else 'not_verified')}
+    if known_tiktok_draft_id:
+        post = s.read_post_by_id(token, known_tiktok_draft_id)
+        if str(post['channel_id']) != str(channels['tiktok']):
+            raise RuntimeError('ID draf TikTok tidak sesuai dengan channel TikTok.')
+        output['known_tiktok_draft'] = post
+        output['channels']['tiktok']['status'] = 'confirmed_by_post_id'
     output['status'] = 'complete_read_only'
     return output
 
@@ -610,6 +620,7 @@ def main():
     p.add_argument('--result',default='autopilot_result.json')
     p.add_argument('--previous-result',default='previous_autopilot_result.json')
     p.add_argument('--audit-date',default='2026-11-20')
+    p.add_argument('--known-tiktok-draft-id',default='')
     args=p.parse_args()
     if args.action=='plan':
         today=datetime.now(WIB).date()
@@ -628,7 +639,7 @@ def main():
               'Tidak ada jadwal atau posting yang dibuat.')
     elif args.action=='audit_drafts':
         try:
-            result=audit_live_drafts(args.audit_date)
+            result=audit_live_drafts(args.audit_date, args.known_tiktok_draft_id)
         except Exception as exc:
             result={'mode':'audit_drafts','date':args.audit_date,'status':'blocked',
                     'writes_performed':False,'detail':str(exc)[:300]}
