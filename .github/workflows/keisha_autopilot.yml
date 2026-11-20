@@ -1,4 +1,5 @@
 name: Keisha - AI Office Autopilot Harian (AMAN)
+run-name: "Keisha AI Office ${{ inputs.request_id || github.event_name }}"
 
 on:
   schedule:
@@ -6,6 +7,10 @@ on:
       timezone: 'Asia/Jakarta'
   workflow_dispatch:
     inputs:
+      request_id:
+        description: 'ID permintaan Rina untuk laporan bertahap (tanpa secret)'
+        required: false
+        type: string
       mode:
         description: 'check = tes, preflight = koneksi, audit_drafts = cek Buffer/Cloudinary tanpa posting, plan/render/drafts/schedule'
         required: true
