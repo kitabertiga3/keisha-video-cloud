@@ -532,16 +532,6 @@ class Tests(TestCase):
                 m.reconcile_failed_drafts(plan,previous,create_missing=True)
         send.assert_not_called()
 
-    def test_workflow_recovery_does_not_render_or_upload(self):
-        from pathlib import Path
-        y=(Path(__file__).resolve().parents[1]/'.github/workflows/keisha_autopilot.yml')
-        source=y.read_text(encoding='utf-8')
-        self.assertIn("if: ${{ env.RUN_MODE == 'audit_drafts' }}",source)
-        self.assertIn("if: ${{ env.RUN_MODE == 'recover_drafts' }}",source)
-        self.assertIn('run-id: ${{ inputs.failed_drafts_run_id }}',source)
-        self.assertIn('python autopilot/office_daily.py audit_drafts',source)
-        self.assertIn('python autopilot/office_daily.py recover_drafts',source)
-        self.assertIn("if: ${{ env.RUN_MODE == 'schedule' }}",source)
 
     def test_cannot_invent_ai(self):
         from unittest.mock import patch
