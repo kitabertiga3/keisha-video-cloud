@@ -275,7 +275,7 @@ class Tests(TestCase):
         self.assertIn('          - render', text)
         self.assertIn('actions/download-artifact@v4', text)
         self.assertIn("run-id: ${{ inputs.source_plan_run_id }}", text)
-        self.assertIn("if: ${{ env.RUN_MODE == 'render' || env.RUN_MODE == 'schedule' }}", text)
+        self.assertIn("if: ${{ env.RUN_MODE == 'render' || env.RUN_MODE == 'drafts' || env.RUN_MODE == 'schedule' }}", text)
         self.assertIn("name: QC video MP4 dan audio (tidak mengunggah)", text)
         self.assertIn("if: ${{ env.RUN_MODE == 'schedule' }}", text)
         self.assertNotIn("if: ${{ env.RUN_MODE == 'render' }}\n        run: |\n          python autopilot/office_daily.py schedule", text)
@@ -294,7 +294,7 @@ class Tests(TestCase):
         self.assertLess(prepare, install)
         self.assertLess(install, render)
         step = content[prepare:install]
-        self.assertIn("if: ${{ env.RUN_MODE == 'render' || env.RUN_MODE == 'schedule' }}", step)
+        self.assertIn("if: ${{ env.RUN_MODE == 'render' || env.RUN_MODE == 'drafts' || env.RUN_MODE == 'schedule' }}", step)
         self.assertIn('apt-get install -y ffmpeg', step)
         self.assertIn("shutil.which('ffmpeg')", step)
         self.assertIn("shutil.which('ffprobe')", step)
