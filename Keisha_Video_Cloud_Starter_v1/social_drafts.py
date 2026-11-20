@@ -158,7 +158,7 @@ def find_matching_posts(token, channel_id, caption_text, media_url, max_pages=30
         after = None
         visited = set()
         for _ in range(max_pages):
-            params = f"first: 100, input: {{organizationId: {json.dumps(org['id'])}, filter: {{channelIds: [{json.dumps(channel_id)}]}}}}"
+            params = f"first: 50, input: {{organizationId: {json.dumps(org['id'])}, filter: {{channelIds: [{json.dumps(channel_id)}]}}}}"
             if after:
                 params = "after: " + json.dumps(after) + ", " + params
             result = graphql(token, "query { posts(" + params + ") { edges { node { id text status channelId assets { source } } } pageInfo { hasNextPage endCursor } } }")
@@ -170,7 +170,7 @@ def find_matching_posts(token, channel_id, caption_text, media_url, max_pages=30
                 if str(post.get("channelId")) != str(channel_id):
                     continue
                 same_text = str(post.get("text") or "").strip() == caption_text.strip()
-                same_media = any(media_url == asset.get("source") for asset in (post.get("assets") or []))
+                same_media = any(media_url == (asset or {}).get("source") for asset in (post.get("assets") or []))
                 if (same_text or same_media) and post.get("id"):
                     matches[post["id"]] = {"id": post["id"], "status": post.get("status")}
             page = posts.get("pageInfo") or {}
