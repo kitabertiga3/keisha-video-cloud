@@ -726,9 +726,22 @@ def verify_daily_publication() -> dict:
             'published_confirmed':all(v=='sent' for v in statuses.values())}
 
 
+def check_reporting_ready() -> None:
+    """Fail before rendering or publishing if HQ notification cannot be routed."""
+    if not os.getenv('TELEGRAM_KEISHA_TOKEN', '').strip():
+        raise RuntimeError('TELEGRAM_KEISHA_TOKEN belum terpasang. Posting dibatalkan.')
+    if os.getenv('TELEGRAM_CHAT_ID', '').strip() != HEADQUARTERS_CHAT_ID:
+        raise RuntimeError('TELEGRAM_CHAT_ID wajib menunjuk grup AI AFFILIATE OFFICE | HQ. '
+                           'Posting dibatalkan agar laporan tidak salah grup.')
+    if (os.getenv('RUN_MODE') == 'go_live'
+            and Path(AUTOPILOT_FLAG).is_file()):
+        raise RuntimeError('Autopilot harian sudah aktif. Jangan jalankan go_live dua kali.')
+    print('Pelaporan HQ siap. Tidak ada pesan Telegram yang dikirim pada tahap ini.')
+
+
 def main():
     p=argparse.ArgumentParser()
-    p.add_argument('action',choices=('plan','preflight','drafts','audit_drafts','recover_drafts','schedule','record','activate','verify','report_failure'))
+    p.add_argument('action',choices=('plan','preflight','drafts','audit_drafts','recover_drafts','schedule','record','activate','verify','check_reporting','report_failure'))
     p.add_argument('--plan',default='autopilot_plan.json')
     p.add_argument('--video',default='Keisha_Video_Cloud_Starter_v1/hasil/keisha-rcd-video.mp4')
     p.add_argument('--metadata',default='Keisha_Video_Cloud_Starter_v1/hasil/metadata.json')
@@ -769,6 +782,8 @@ def main():
     elif args.action=='recover_drafts':
         raise RuntimeError('Pemulihan draf masih dinonaktifkan sampai audit langsung'
                            ' Buffer selesai dan sudah diperiksa.')
+    elif args.action=='check_reporting':
+        check_reporting_ready()
     elif args.action in ('record','activate','verify'):
         if args.action=='record':
             record_scheduled_receipt(Path(args.result))
