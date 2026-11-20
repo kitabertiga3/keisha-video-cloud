@@ -53,7 +53,7 @@ class SocialDraftsTests(unittest.TestCase):
         observed = []
         def fake_graphql(token, query):
             observed.append(query)
-            return {"createPost": {"post": {"id": "draft-123"}}}
+            return {"createPost": {"post": {"id": "draft-123", "status": "draft"}}}
         with patch.object(module, "graphql", side_effect=fake_graphql):
             result = module.save_draft("fake", "channel-id", "https://res.cloudinary.com/x/video/upload/v1/a.mp4", "Test")
         self.assertEqual(result, "draft-123")
