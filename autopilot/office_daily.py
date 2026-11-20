@@ -365,8 +365,24 @@ def schedule_all(plan: dict, video: Path, metadata: Path, run_id: int, result_pa
         raise RuntimeError('BUFFER_API_KEY belum tersedia.')
     when = due_at(date.fromisoformat(plan['date']), plan['posting_time'])
     channels = s.get_channels(os.environ['BUFFER_API_KEY'])
-    # Lock by deterministic calendar date, not GitHub run ID. Reruns will refuse to re-post.
-    url = upload_daily_once(video, plan['date'])
+    # A pre-existing Cloudinary object may already have been sent to Buffer in
+    # another run. Never re-upload/re-schedule on an ambiguous partial result.
+    # Persist a same-date failure receipt for audit and team_ops instead.
+    try:
+        url = upload_daily_once(video, plan['date'])
+    except RuntimeError as exc:
+        if 'KUNCI ANTI-SPAM' not in str(exc):
+            raise
+        outcome = {'date': plan['date'], 'video': video_info,
+                   'status': 'manual_review', 'published': False,
+                   'due_at_utc': when.isoformat(), 'posts': {},
+                   'errors': [{'platform': 'all',
+                               'error': 'ExistingDailyMedia',
+                               'detail': 'Media already exists in Cloudinary. Verify Buffer and the daily receipt manually; no new posting attempted.'}]}
+        result_path.parent.mkdir(parents=True, exist_ok=True)
+        result_path.write_text(json.dumps(outcome, indent=2, ensure_ascii=False),
+                               encoding='utf-8')
+        return outcome
     outcome = {'date': plan['date'], 'video': video_info, 'status': 'partial',
                'due_at_utc': when.isoformat(), 'cloudinary_url': url, 'posts': {}, 'errors': []}
     for service in ('tiktok','facebook','youtube'):

@@ -367,6 +367,42 @@ class Tests(TestCase):
         self.assertIn("if: ${{ env.RUN_MODE == 'plan' || env.RUN_MODE == 'schedule' || env.RUN_MODE == 'go_live' || ((env.RUN_MODE == 'render' || env.RUN_MODE == 'drafts') && inputs.source_plan_run_id == '') }}", text)
 
 
+    def test_existing_daily_media_never_creates_duplicate_buffer_posts(self):
+        import json
+        import sys
+        from pathlib import Path
+        from tempfile import TemporaryDirectory
+        from unittest.mock import patch
+        from Keisha_Video_Cloud_Starter_v1 import social_drafts as social
+        plan = self.plan()
+        plan['date'] = '2026-11-20'
+        meta = {key:plan[key] for key in ('headings','bodies','cta')}
+        with TemporaryDirectory() as directory:
+            output = Path(directory) / 'schedule_result.json'
+            with patch.dict(sys.modules, {'social_drafts': social}), \
+                 patch.object(social, 'validate_metadata', return_value=meta), \
+                 patch.object(social, 'validate_video', return_value={'seconds': 34}), \
+                 patch.object(social, 'get_channels', return_value={'tiktok':'a','facebook':'b','youtube':'c'}), \
+                 patch.object(social, 'save_scheduled_post') as scheduled, \
+                 patch.object(m, 'upload_daily_once', side_effect=RuntimeError('KUNCI ANTI-SPAM: daily media exists')), \
+                 patch.object(m, 'due_at', return_value=datetime(2026,11,20,12,tzinfo=timezone.utc)), \
+                 patch.dict('os.environ', {'BUFFER_API_KEY':'test'}):
+                receipt=m.schedule_all(plan,Path(directory)/'video.mp4',Path(directory)/'meta.json',24,output)
+            self.assertEqual(receipt['date'],plan['date'])
+            self.assertEqual(receipt['status'],'manual_review')
+            self.assertEqual(receipt['posts'],{})
+            self.assertTrue(receipt['errors'])
+            self.assertEqual(json.loads(output.read_text())['status'],'manual_review')
+            scheduled.assert_not_called()
+
+    def test_workflow_has_same_day_receipt_guard_and_separate_preflight_receipt(self):
+        from pathlib import Path
+        workflow=(Path(__file__).resolve().parents[1]/'.github/workflows/keisha_autopilot.yml').read_text()
+        self.assertIn('keisha-autopilot-receipts/',workflow)
+        self.assertIn('TZ=Asia/Jakarta date +%F',workflow)
+        self.assertIn('preflight --result autopilot_preflight.json',workflow)
+        self.assertIn("result.get('date') != plan.get('date')",workflow)
+
     def test_buffer_draft_requires_explicit_draft_confirmation(self):
         from unittest.mock import patch
         from Keisha_Video_Cloud_Starter_v1 import social_drafts as s

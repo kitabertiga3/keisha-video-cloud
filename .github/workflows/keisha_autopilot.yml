@@ -61,6 +61,19 @@ jobs:
         id: check
         shell: bash
         run: |
+          set -euo pipefail
+          # Do not produce/upload twice for a WIB business date with a verified receipt.
+          # Applies to scheduled runs and manual schedule/go_live, but not read-only tests.
+          mode="${{ github.event_name == 'schedule' && 'schedule' || inputs.mode }}"
+          day="$(TZ=Asia/Jakarta date +%F)"
+          receipt=".github/keisha-autopilot-receipts/${day}.json"
+          if [[ "$mode" == "schedule" || "$mode" == "go_live" ]]; then
+            if [[ -f "$receipt" ]]; then
+              echo "allowed=false" >> "$GITHUB_OUTPUT"
+              echo "Receipt for ${day} already exists. Skip safely: no repeat rendering, upload, or Buffer scheduling."
+              exit 0
+            fi
+          fi
           if [[ "$GITHUB_EVENT_NAME" != "schedule" ]]; then
             echo "allowed=true" >> "$GITHUB_OUTPUT"
           elif [[ -f .github/keisha-autopilot.enabled.json ]]; then
@@ -98,7 +111,7 @@ jobs:
           python -m unittest discover -s autopilot -p 'test_*.py' -v
       - name: Periksa channel Buffer tanpa mengirim posting (preflight)
         if: ${{ env.RUN_MODE == 'preflight' || env.RUN_MODE == 'drafts' || env.RUN_MODE == 'go_live' || env.RUN_MODE == 'schedule' || env.RUN_MODE == 'recover_tiktok' }}
-        run: python autopilot/office_daily.py preflight --result autopilot_result.json
+        run: python autopilot/office_daily.py preflight --result autopilot_preflight.json
       - name: Siapkan SDK Cloudinary untuk audit BACA SAJA
         if: ${{ env.RUN_MODE == 'audit_drafts' }}
         run: python -m pip install 'cloudinary>=1.40,<2'
@@ -239,15 +252,21 @@ jobs:
       - name: Catat hasil kerja berdasarkan video QC dan ID jadwal Buffer
         if: ${{ always() && (env.RUN_MODE == 'schedule' || env.RUN_MODE == 'go_live') }}
         run: |
-          if [[ -f autopilot_plan.json && -f autopilot_result.json && -f Keisha_Video_Cloud_Starter_v1/hasil/metadata.json ]]; then
+          if [[ -f autopilot_plan.json && -f Keisha_Video_Cloud_Starter_v1/hasil/metadata.json ]]; then
             python - <<'PY'
           import json
           from pathlib import Path
           from autopilot.team_ops import build_record
           plan=json.loads(Path('autopilot_plan.json').read_text(encoding='utf-8'))
           meta=json.loads(Path('Keisha_Video_Cloud_Starter_v1/hasil/metadata.json').read_text(encoding='utf-8'))
-          result=json.loads(Path('autopilot_result.json').read_text(encoding='utf-8'))
-          record=build_record(plan=plan, metadata=meta, post_result=result)
+          result_path=Path('autopilot_result.json')
+          result=json.loads(result_path.read_text(encoding='utf-8')) if result_path.exists() else None
+          # A preflight/old-date report is NOT proof for this plan.
+          if not isinstance(result,dict) or result.get('date') != plan.get('date') or result.get('status') not in ('scheduled','manual_review'):
+              record=build_record(plan=plan, metadata=meta)
+              record['note']='No matching final Buffer receipt for this plan; scheduling not verified.'
+          else:
+              record=build_record(plan=plan, metadata=meta, post_result=result)
           Path('ai_office_team_status.json').write_text(json.dumps(record,ensure_ascii=False,indent=2),encoding='utf-8')
           print('Status AI Office:',record['stage'])
           PY
@@ -273,6 +292,7 @@ jobs:
           path: |
             autopilot_plan.json
             autopilot_result.json
+            autopilot_preflight.json
             ai_office_team_status.json
             Keisha_Video_Cloud_Starter_v1/hasil/keisha-rcd-video.mp4
             Keisha_Video_Cloud_Starter_v1/hasil/metadata.json
