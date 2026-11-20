@@ -737,7 +737,7 @@ def prepare_recovery_from_manifest(manifest_path: Path, out_dir: Path) -> dict:
     manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
     source = manifest.get('video_url')
     if not isinstance(source,str) or not re.fullmatch(
-        r'https://res\\.cloudinary\\.com/[A-Za-z0-9_-]+/video/upload/[A-Za-z0-9_./-]+\\.mp4', source):
+        r'https://res\.cloudinary\.com/[A-Za-z0-9_-]+/video/upload/[A-Za-z0-9_./-]+\.mp4', source):
         raise RuntimeError('Recovery: tautan video sumber bukan URL Cloudinary MP4 yang diizinkan.')
     expected = manifest.get('source_sha256','').lower()
     if not re.fullmatch(r'[0-9a-f]{64}',expected):
