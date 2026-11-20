@@ -414,6 +414,9 @@ def preflight_connections() -> dict:
 
     No media uploads, Telegram messages, Buffer mutations or scheduled posts.
     """
+    repo_root = Path(__file__).resolve().parents[1]
+    if str(repo_root) not in sys.path:
+        sys.path.insert(0, str(repo_root))
     from Keisha_Video_Cloud_Starter_v1.social_drafts import get_channels
     required = ('BUFFER_API_KEY', 'CLOUDINARY_CLOUD_NAME',
                 'CLOUDINARY_API_KEY', 'CLOUDINARY_API_SECRET')
