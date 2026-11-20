@@ -385,6 +385,9 @@ def schedule_all(plan: dict, video: Path, metadata: Path, run_id: int, result_pa
         return outcome
     outcome = {'date': plan['date'], 'video': video_info, 'status': 'partial', 'mode': 'publish_now' if publish_now else 'schedule',
                'due_at_utc': when.isoformat() if when else None, 'cloudinary_url': url, 'posts': {}, 'errors': []}
+    if publish_now:
+        outcome['title'] = plan['headings'][0]
+        outcome['captions'] = {p: plan['captions'][p] for p in ('tiktok','facebook','youtube')}
     for service in ('tiktok','facebook','youtube'):
         try:
             if publish_now:
@@ -722,7 +725,9 @@ def record_immediate_receipt(path: Path) -> dict:
             raise RuntimeError('Respons Buffer tidak valid: '+platform)
     receipt = {'date':result['date'], 'status':'submitted',
                'published':False, 'delivery_only':True,
-               'posts':posts, 'mode':'publish_now'}
+               'posts':posts, 'mode':'publish_now',
+               'title':result.get('title',''),
+               'captions':result.get('captions',{})}
     _github_put_new_file(AUTOPILOT_RECEIPT_DIR+'/'+receipt['date']+'.json',receipt)
     return receipt
 
