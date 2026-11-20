@@ -6,6 +6,7 @@ There is no hidden fallback to fabricated AI or a second automatic Buffer retry.
 from __future__ import annotations
 
 import argparse
+import base64
 from datetime import datetime, date, timedelta, timezone
 import json
 import os
@@ -335,6 +336,9 @@ def due_at(today: date, hhmm: str, now: datetime | None = None) -> datetime:
 def telegram_report(text: str, *, optional: bool = True) -> None:
     token = os.getenv('TELEGRAM_KEISHA_TOKEN', '').strip()
     chat = os.getenv('TELEGRAM_CHAT_ID', '').strip()
+    if chat and chat != HEADQUARTERS_CHAT_ID:
+        print('Peringatan: Telegram destination bukan AI AFFILIATE OFFICE | HQ. Tidak mengirim ke grup lain.', file=sys.stderr)
+        return
     if not token or not chat:
         if not optional: raise RuntimeError('Token pelaporan Telegram belum tersedia.')
         return
@@ -616,9 +620,115 @@ def preflight_connections() -> dict:
     return result
 
 
+AUTOPILOT_FLAG = '.github/keisha-autopilot.enabled.json'
+AUTOPILOT_RECEIPT_DIR = '.github/keisha-autopilot-receipts'
+HEADQUARTERS_CHAT_ID = '-5540202723'
+
+
+def _github_put_new_file(repo_path: str, data: dict) -> None:
+    """Write a small receipt through Actions' scoped GitHub token.
+
+    Refuses to overwrite any existing state; workflows never blindly repeat
+    publication after an ambiguous API response.
+    """
+    token = os.getenv('GITHUB_TOKEN', '').strip()
+    repo = os.getenv('GITHUB_REPOSITORY', '')
+    if not token or not re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', repo):
+        raise RuntimeError('GitHub token/repository tidak tersedia untuk menyimpan status.')
+    api = 'https://api.github.com/repos/' + repo + '/contents/' + repo_path
+    encoded = base64.b64encode(json.dumps(data, ensure_ascii=False, indent=2).encode()).decode()
+    body = json.dumps({'message': 'Keisha autopilot: save verified status ' + data.get('date', ''),
+                       'content': encoded, 'branch':'main'}).encode()
+    req = urllib.request.Request(api, data=body, method='PUT',
+        headers={'Authorization': 'Bearer ' + token,
+                 'Accept': 'application/vnd.github+json',
+                 'User-Agent':'KeishaAutopilot/1.0',
+                 'X-GitHub-Api-Version':'2022-11-28',
+                 'Content-Type':'application/json'})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as response:
+            status = response.status
+    except urllib.error.HTTPError as exc:
+        raise RuntimeError('Tidak bisa menyimpan status GitHub (HTTP '
+                           + str(exc.code) + '). Jangan ulang posting.') from None
+    if status not in (200, 201):
+        raise RuntimeError('GitHub tidak mengonfirmasi penyimpanan status.')
+
+
+def validated_schedule_receipt(path: Path) -> dict:
+    result = json.loads(path.read_text(encoding='utf-8'))
+    posts = result.get('posts') or {}
+    if result.get('status') != 'scheduled' or set(posts) != {'tiktok','facebook','youtube'}:
+        raise RuntimeError('Posting belum lengkap 3/3; autopilot tidak boleh diaktifkan.')
+    if result.get('errors'):
+        raise RuntimeError('Masih ada kesalahan channel; autopilot tetap mati.')
+    for service, post in posts.items():
+        if not isinstance(post.get('id'), str) or not post['id'].strip():
+            raise RuntimeError('ID Buffer hilang pada ' + service)
+        if post.get('status') != 'scheduled':
+            raise RuntimeError('Buffer belum mengonfirmasi jadwal ' + service)
+    expected = datetime.now(WIB).date().isoformat()
+    if result.get('date') != expected:
+        raise RuntimeError('Tanggal jadwal bukan hari ini. Pencatatan dibatalkan.')
+    return {'date':expected,'posts':posts,'due_at_utc':result.get('due_at_utc'),
+            'created_at_utc':datetime.now(timezone.utc).isoformat(),
+            'status':'scheduled','published':False}
+
+
+def record_scheduled_receipt(path: Path) -> dict:
+    receipt = validated_schedule_receipt(path)
+    _github_put_new_file(AUTOPILOT_RECEIPT_DIR + '/' + receipt['date'] + '.json', receipt)
+    print('Receipt Buffer 3/3 tersimpan ke repo, tanpa mengulang publikasi.')
+    return receipt
+
+
+def activate_daily_autopilot(path: Path) -> None:
+    receipt = validated_schedule_receipt(path)
+    # Only after 3/3 posts are accepted AND receipt is committed.
+    _github_put_new_file(AUTOPILOT_FLAG,
+        {'enabled':True,'date':receipt['date'],
+         'first_receipt':AUTOPILOT_RECEIPT_DIR+'/'+receipt['date']+'.json'})
+    telegram_report('✅ Keisha Autopilot harian aktif, Bos! Hari ini 3/3 channel '
+                    'sudah dijadwalkan Buffer. Besok sistem buat video dan jadwal sendiri. '
+                    'Posting belum sama dengan terbit; nanti status dikonfirmasi lagi.')
+
+
+def verify_daily_publication() -> dict:
+    """Late-day one-time status report, not a second posting attempt."""
+    base = Path(__file__).resolve().parents[1]
+    if str(base) not in sys.path:
+        sys.path.insert(0, str(base))
+    from Keisha_Video_Cloud_Starter_v1 import social_drafts as s
+    day = datetime.now(WIB).date().isoformat()
+    path = Path(AUTOPILOT_RECEIPT_DIR) / (day + '.json')
+    if not path.is_file():
+        telegram_report('⚠️ Keisha: bukti jadwal '+day+' belum ditemukan di GitHub. '
+                        'Cek GitHub Actions; tidak ada posting ulang.')
+        return {'date':day,'status':'no_receipt'}
+    receipt = json.loads(path.read_text(encoding='utf-8'))
+    token = os.getenv('BUFFER_API_KEY','').strip()
+    if not token:
+        raise RuntimeError('Token Buffer tidak tersedia saat verifikasi.')
+    statuses = {}
+    for platform, old in receipt.get('posts',{}).items():
+        try:
+            post = s.read_post_by_id(token, old['id'])
+            statuses[platform] = post.get('status','unknown')
+        except Exception:
+            statuses[platform] = 'unverified'
+    message = ('📊 Status publikasi Keisha '+day+' (laporan Buffer):\n'
+               + '\n'.join(p.title()+': '+statuses.get(p,'belum dicek')
+                            for p in ('tiktok','facebook','youtube'))
+               + '\nStatus sent = Buffer mengonfirmasi terkirim. '
+                 'Jika masih scheduled/error, perlu dicek, tidak akan diulang.')
+    telegram_report(message)
+    return {'date':day,'status':'verified','channels':statuses,
+            'published_confirmed':all(v=='sent' for v in statuses.values())}
+
+
 def main():
     p=argparse.ArgumentParser()
-    p.add_argument('action',choices=('plan','preflight','drafts','audit_drafts','recover_drafts','schedule','report_failure'))
+    p.add_argument('action',choices=('plan','preflight','drafts','audit_drafts','recover_drafts','schedule','record','activate','verify','report_failure'))
     p.add_argument('--plan',default='autopilot_plan.json')
     p.add_argument('--video',default='Keisha_Video_Cloud_Starter_v1/hasil/keisha-rcd-video.mp4')
     p.add_argument('--metadata',default='Keisha_Video_Cloud_Starter_v1/hasil/metadata.json')
@@ -659,6 +769,15 @@ def main():
     elif args.action=='recover_drafts':
         raise RuntimeError('Pemulihan draf masih dinonaktifkan sampai audit langsung'
                            ' Buffer selesai dan sudah diperiksa.')
+    elif args.action in ('record','activate','verify'):
+        if args.action=='record':
+            record_scheduled_receipt(Path(args.result))
+        elif args.action=='activate':
+            activate_daily_autopilot(Path(args.result))
+        else:
+            status=verify_daily_publication()
+            Path(args.result).write_text(json.dumps(status,ensure_ascii=False,indent=2),
+                                         encoding='utf-8')
     elif args.action=='schedule':
         plan=json.loads(Path(args.plan).read_text(encoding='utf-8'))
         if plan.get('date')!=datetime.now(WIB).date().isoformat():
@@ -672,7 +791,17 @@ def main():
         if result['errors']:
             raise RuntimeError('Ada channel gagal. Periksa artifact hasil, jangan tekan ulang schedule.')
     else:
-        telegram_report('⚠️ AI Office otomatis gagal pada satu tahap. Tidak ada percobaan posting ulang. Periksa GitHub Actions. Status kanal yang berhasil mungkin sudah terjadwal.')
+        # After partial scheduling, main() already sent a channel-specific alert.
+        receipt_path=Path(args.result)
+        if receipt_path.exists():
+            try:
+                prev=json.loads(receipt_path.read_text(encoding='utf-8'))
+                if prev.get('status') in ('manual_review','scheduled'):
+                    return
+            except (ValueError, OSError):
+                pass
+        telegram_report('⚠️ Keisha Autopilot berhenti sebelum selesai. '
+                        'Cek GitHub Actions; sistem TIDAK mengulang posting otomatis.')
 
 if __name__=='__main__':
     main()
