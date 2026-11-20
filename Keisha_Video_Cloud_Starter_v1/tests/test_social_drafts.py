@@ -73,6 +73,30 @@ class SocialDraftsTests(unittest.TestCase):
         self.assertIn("'fps=30,format=yuv420p'",render)
         self.assertNotIn("'fps=15,format=yuv420p'",render)
 
+    def test_daily_channel_guard_blocks_existing_post(self):
+        def fake_graphql(token, query):
+            if "organizations" in query:
+                return {"account":{"organizations":[{"id":"org"}]}}
+            return {"posts":{"edges":[{"node":{"id":"post1","status":"sent",
+                "channelId":"channel","createdAt":"2026-11-21T03:51:00+07:00",
+                "dueAt":None}}],"pageInfo":{"hasNextPage":False}}}
+        with patch.object(module, "graphql", side_effect=fake_graphql):
+            with self.assertRaisesRegex(RuntimeError, "BATAS SATU POSTING"):
+                module.guard_daily_channel_posts("token","channel","2026-11-21")
+
+    def test_daily_channel_guard_allows_empty_day(self):
+        def fake_graphql(token, query):
+            if "organizations" in query:
+                return {"account":{"organizations":[{"id":"org"}]}}
+            return {"posts":{"edges":[],"pageInfo":{"hasNextPage":False}}}
+        with patch.object(module, "graphql", side_effect=fake_graphql):
+            self.assertTrue(module.guard_daily_channel_posts("token","channel","2026-11-22"))
+
+    def test_daily_channel_guard_fails_closed_on_inventory_error(self):
+        with patch.object(module, "graphql", side_effect=RuntimeError("API down")):
+            with self.assertRaisesRegex(RuntimeError, "API down"):
+                module.guard_daily_channel_posts("token","channel","2026-11-22")
+
     def test_publish_now_blocks_matching_buffer_post_without_mutation(self):
         with patch.object(module, "find_matching_posts",
                           return_value=[{"id":"existing123","status":"sent"}]), \

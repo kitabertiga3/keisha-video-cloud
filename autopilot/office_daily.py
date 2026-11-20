@@ -370,6 +370,11 @@ def schedule_all(plan: dict, video: Path, metadata: Path, run_id: int, result_pa
         raise RuntimeError('BUFFER_API_KEY belum tersedia.')
     when = None if publish_now else due_at(date.fromisoformat(plan['date']), plan['posting_time'])
     channels = s.get_channels(os.environ['BUFFER_API_KEY'])
+    # Stop all three channels before any upload if one already has a post
+    # for today's publishing date. This is a safety cap, not proof of provider quota.
+    for service in ('tiktok', 'facebook', 'youtube'):
+        s.guard_daily_channel_posts(os.environ['BUFFER_API_KEY'],
+                                    channels[service], plan['date'])
     # Read-only duplicate inventory BEFORE Cloudinary uploads or Buffer writes.
     # A missing/failed scan always blocks rather than guessing no duplicate.
     for service in ('tiktok', 'facebook', 'youtube'):
