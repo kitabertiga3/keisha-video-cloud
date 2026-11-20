@@ -19,6 +19,11 @@ on:
           - render
           - drafts
           - schedule
+      known_tiktok_draft_id:
+        description: 'ID draf TikTok #16 untuk diverifikasi (hanya baca)'
+        required: false
+        default: '6aff9a7c4c1afd05deddd12c'
+        type: string
       draft_audit_date:
         description: 'Tanggal video Cloudinary lama untuk audit (tanpa GitHub artifact)'
         required: false
@@ -73,6 +78,7 @@ jobs:
         run: |
           python autopilot/office_daily.py audit_drafts \
             --audit-date "${{ inputs.draft_audit_date }}" \
+            --known-tiktok-draft-id "${{ inputs.known_tiktok_draft_id }}" \
             --result autopilot_result.json
       - name: Ambil naskah AI yang sudah sukses (khusus render)
         if: ${{ (env.RUN_MODE == 'render' || env.RUN_MODE == 'drafts') && inputs.source_plan_run_id != '' }}
