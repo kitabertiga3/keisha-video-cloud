@@ -351,7 +351,7 @@ def telegram_report(text: str, *, optional: bool = True) -> None:
         print('Peringatan: laporan Telegram tidak berhasil dikirim.', file=sys.stderr)
 
 
-def schedule_all(plan: dict, video: Path, metadata: Path, run_id: int, result_path: Path) -> dict:
+def schedule_all(plan: dict, video: Path, metadata: Path, run_id: int, result_path: Path, *, publish_now: bool = False) -> dict:
     # External writes only occur after every preflight passes.
     base = Path(__file__).resolve().parents[1] / 'Keisha_Video_Cloud_Starter_v1'
     sys.path.insert(0, str(base))
@@ -363,7 +363,7 @@ def schedule_all(plan: dict, video: Path, metadata: Path, run_id: int, result_pa
         raise ValueError('Metadata video tidak cocok dengan naskah AI yang disetujui.')
     if not os.getenv('BUFFER_API_KEY'):
         raise RuntimeError('BUFFER_API_KEY belum tersedia.')
-    when = due_at(date.fromisoformat(plan['date']), plan['posting_time'])
+    when = None if publish_now else due_at(date.fromisoformat(plan['date']), plan['posting_time'])
     channels = s.get_channels(os.environ['BUFFER_API_KEY'])
     # A pre-existing Cloudinary object may already have been sent to Buffer in
     # another run. Never re-upload/re-schedule on an ambiguous partial result.
@@ -375,7 +375,7 @@ def schedule_all(plan: dict, video: Path, metadata: Path, run_id: int, result_pa
             raise
         outcome = {'date': plan['date'], 'video': video_info,
                    'status': 'manual_review', 'published': False,
-                   'due_at_utc': when.isoformat(), 'posts': {},
+                   'due_at_utc': when.isoformat() if when else None, 'posts': {},
                    'errors': [{'platform': 'all',
                                'error': 'ExistingDailyMedia',
                                'detail': 'Media already exists in Cloudinary. Verify Buffer and the daily receipt manually; no new posting attempted.'}]}
@@ -383,15 +383,21 @@ def schedule_all(plan: dict, video: Path, metadata: Path, run_id: int, result_pa
         result_path.write_text(json.dumps(outcome, indent=2, ensure_ascii=False),
                                encoding='utf-8')
         return outcome
-    outcome = {'date': plan['date'], 'video': video_info, 'status': 'partial',
-               'due_at_utc': when.isoformat(), 'cloudinary_url': url, 'posts': {}, 'errors': []}
+    outcome = {'date': plan['date'], 'video': video_info, 'status': 'partial', 'mode': 'publish_now' if publish_now else 'schedule',
+               'due_at_utc': when.isoformat() if when else None, 'cloudinary_url': url, 'posts': {}, 'errors': []}
     for service in ('tiktok','facebook','youtube'):
         try:
-            post = s.save_scheduled_post(
-                os.environ['BUFFER_API_KEY'], channels[service], url,
-                plan['captions'][service], platform=service,
-                title=plan['headings'][0],
-                due_at=when.strftime('%Y-%m-%dT%H:%M:%S.000Z'))
+            if publish_now:
+                post = s.save_publish_now_post(
+                    os.environ['BUFFER_API_KEY'], channels[service], url,
+                    plan['captions'][service], platform=service,
+                    title=plan['headings'][0])
+            else:
+                post = s.save_scheduled_post(
+                    os.environ['BUFFER_API_KEY'], channels[service], url,
+                    plan['captions'][service], platform=service,
+                    title=plan['headings'][0],
+                    due_at=when.strftime('%Y-%m-%dT%H:%M:%S.000Z'))
             outcome['posts'][service] = post
         except Exception as exc:
             outcome['errors'].append({'platform':service, 'error':type(exc).__name__,
@@ -401,7 +407,7 @@ def schedule_all(plan: dict, video: Path, metadata: Path, run_id: int, result_pa
             result_path.parent.mkdir(parents=True, exist_ok=True)
             result_path.write_text(json.dumps(outcome, indent=2, ensure_ascii=False),
                                    encoding='utf-8')
-    outcome['status'] = 'scheduled' if len(outcome['posts']) == 3 else 'manual_review'
+    outcome['status'] = ('submitted' if publish_now else 'scheduled') if len(outcome['posts']) == 3 and not outcome['errors'] else 'manual_review'
     result_path.parent.mkdir(parents=True,exist_ok=True)
     result_path.write_text(json.dumps(outcome,indent=2,ensure_ascii=False),encoding='utf-8')
     return outcome
@@ -699,6 +705,28 @@ def record_scheduled_receipt(path: Path) -> dict:
     return receipt
 
 
+def record_immediate_receipt(path: Path) -> dict:
+    """Persist one-shot Buffer submissions before the next scheduled run.
+
+    Status is 'submitted', not verified as live. A partial submission is NOT
+    retried, and the daily guard remains fail-closed for ambiguous outcomes.
+    """
+    result = json.loads(path.read_text(encoding='utf-8'))
+    if result.get('status') != 'submitted' or result.get('mode') != 'publish_now':
+        raise RuntimeError('Publish Now belum dikonfirmasi 3/3; jangan ulang otomatis.')
+    posts = result.get('posts') or {}
+    if set(posts) != {'tiktok','facebook','youtube'}:
+        raise RuntimeError('ID Buffer belum lengkap untuk bukti Publish Now.')
+    for platform, post in posts.items():
+        if not post.get('id') or post.get('status') not in ('sent','sending','scheduled'):
+            raise RuntimeError('Respons Buffer tidak valid: '+platform)
+    receipt = {'date':result['date'], 'status':'submitted',
+               'published':False, 'delivery_only':True,
+               'posts':posts, 'mode':'publish_now'}
+    _github_put_new_file(AUTOPILOT_RECEIPT_DIR+'/'+receipt['date']+'.json',receipt)
+    return receipt
+
+
 def activate_daily_autopilot(path: Path) -> None:
     receipt = validated_schedule_receipt(path)
     # Only after 3/3 posts are accepted AND receipt is committed.
@@ -990,7 +1018,7 @@ def check_reporting_ready() -> None:
 
 def main():
     p=argparse.ArgumentParser()
-    p.add_argument('action',choices=('plan','preflight','drafts','audit_drafts','recover_drafts','schedule','record','activate','verify','check_reporting','prepare_recovery','recover_tiktok','report_failure'))
+    p.add_argument('action',choices=('plan','preflight','drafts','audit_drafts','recover_drafts','schedule','record','activate','verify','check_reporting','prepare_recovery','recover_tiktok','report_failure','publish_now','record_now'))
     p.add_argument('--plan',default='autopilot_plan.json')
     p.add_argument('--video',default='Keisha_Video_Cloud_Starter_v1/hasil/keisha-rcd-video.mp4')
     p.add_argument('--metadata',default='Keisha_Video_Cloud_Starter_v1/hasil/metadata.json')
@@ -1049,6 +1077,24 @@ def main():
             status=verify_daily_publication()
             Path(args.result).write_text(json.dumps(status,ensure_ascii=False,indent=2),
                                          encoding='utf-8')
+    elif args.action=='publish_now':
+        plan=json.loads(Path(args.plan).read_text(encoding='utf-8'))
+        if plan.get('date')!=datetime.now(WIB).date().isoformat():
+            raise RuntimeError('Naskah bukan untuk hari ini. Tidak dipublikasikan.')
+        result=schedule_all(plan, Path(args.video), Path(args.metadata),
+                            int(os.environ.get('GITHUB_RUN_ID','0')),
+                            Path(args.result), publish_now=True)
+        telegram_report('📢 Keisha — permintaan Publish Now ' + plan['date'] + '\\n'
+                        + 'Judul: ' + plan['headings'][0] + '\\n'
+                        + 'TikTok: ' + str((result['posts'].get('tiktok') or {}).get('status', 'gagal')) + '\\n'
+                        + 'Facebook: ' + str((result['posts'].get('facebook') or {}).get('status', 'gagal')) + '\\n'
+                        + 'YouTube: ' + str((result['posts'].get('youtube') or {}).get('status', 'gagal')) + '\\n'
+                        + 'Ini hanya konfirmasi respons Buffer, belum bukti tayang publik. '
+                        + 'Tidak ada posting ulang otomatis.')
+        if result['errors']:
+            raise RuntimeError('Pengiriman parsial; periksa Buffer. Jangan ulang otomatis.')
+    elif args.action=='record_now':
+        print('Buffer Publish Now receipt:', record_immediate_receipt(Path(args.result)))
     elif args.action=='schedule':
         plan=json.loads(Path(args.plan).read_text(encoding='utf-8'))
         if plan.get('date')!=datetime.now(WIB).date().isoformat():

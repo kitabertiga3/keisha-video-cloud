@@ -221,6 +221,30 @@ def save_scheduled_post(token, channel_id, url, text, *, platform, title, due_at
     return {"id":post["id"], "status":post["status"], "due_at":post.get("dueAt")}
 
 
+
+def save_publish_now_post(token, channel_id, url, text, *, platform, title):
+    """Submit one video for immediate Buffer delivery; never retry on ambiguity."""
+    metadata = draft_metadata(platform, title)
+    q = ("mutation { createPost(input: {"
+         f"text: {json.dumps(text, ensure_ascii=False)}, "
+         f"channelId: {json.dumps(channel_id)}, "
+         "schedulingType: automatic, mode: shareNow, "
+         + metadata +
+         f"assets: [{{video: {{url: {json.dumps(url)}}}}}]"
+         "}) { ... on PostActionSuccess { post { id status } } "
+         "... on MutationError { message } } }")
+    result = graphql(token, q).get("createPost") or {}
+    post = result.get("post") or {}
+    if not post.get("id"):
+        raise RuntimeError("Buffer menolak Publish Now " + platform + ": "
+                           + str(result.get("message", "tanpa konfirmasi"))[:220])
+    status = str(post.get("status") or "").lower()
+    if status not in ("sent", "sending", "scheduled"):
+        raise RuntimeError("Buffer status Publish Now belum pasti: " + status
+                           + ". Jangan ulangi otomatis.")
+    return {"id": post["id"], "status": status, "due_at": None}
+
+
 def read_post_by_id(token, post_id):
     """Read the original Buffer post directly, regardless of rewritten asset URLs."""
     if not isinstance(post_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{8,128}", post_id):
