@@ -188,18 +188,51 @@ def find_matching_posts(token, channel_id, caption_text, media_url, max_pages=30
     return list(matches.values())
 
 
+def save_scheduled_post(token, channel_id, url, text, *, platform, title, due_at):
+    """Schedule one future post using the metadata also required by drafts."""
+    if not isinstance(due_at, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.000Z", due_at):
+        raise ValueError("Waktu jadwal wajib UTC ISO-8601.")
+    metadata = draft_metadata(platform, title)
+    q = ("mutation { createPost(input: {"
+         f"text: {json.dumps(text, ensure_ascii=False)}, "
+         f"channelId: {json.dumps(channel_id)}, "
+         "schedulingType: automatic, mode: customScheduled, "
+         f"dueAt: {json.dumps(due_at)}, "
+         + metadata +
+         f"assets: [{{video: {{url: {json.dumps(url)}}}}}]"
+         "}) { ... on PostActionSuccess { post { id dueAt status } } "
+         "... on MutationError { message } } }")
+    outcome = graphql(token, q).get("createPost") or {}
+    post = outcome.get("post") or {}
+    if not post.get("id"):
+        raise RuntimeError("Buffer menolak jadwal " + platform + ": "
+                           + str(outcome.get("message","tidak ada alasan"))[:220])
+    if str(post.get("status") or "").lower() != "scheduled":
+        raise RuntimeError("Buffer tidak mengonfirmasi jadwal " + platform +
+                           " (status=" + str(post.get("status"))[:30] + ").")
+    return {"id":post["id"], "status":post["status"], "due_at":post.get("dueAt")}
+
+
 def read_post_by_id(token, post_id):
     """Read the original Buffer post directly, regardless of rewritten asset URLs."""
     if not isinstance(post_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{8,128}", post_id):
         raise ValueError("ID draf Buffer tidak valid.")
     q = ('query { post(input: {id: ' + json.dumps(post_id)
          + '}) { id status channelId createdAt assets { source } } }')
-    post = graphql(token, q).get("post")
+    try:
+        post = graphql(token, q).get("post")
+    except RuntimeError as exc:
+        # Inaccessible/deleted post IDs are a diagnostic result, NOT retry permission.
+        if "post not found for id:" in str(exc).lower():
+            return {"id":post_id, "status":"not_found", "channel_id":None,
+                    "reachable":False, "asset_count":0}
+        raise
     if not isinstance(post, dict) or post.get("id") != post_id:
-        raise RuntimeError("Buffer tidak mengonfirmasi ID draf tersebut.")
+        return {"id":post_id, "status":"not_verified", "channel_id":None,
+                "reachable":False, "asset_count":0}
     return {"id":post_id, "status":post.get("status"),
             "channel_id":post.get("channelId"), "created_at":post.get("createdAt"),
-            "asset_count":len(post.get("assets") or [])}
+            "reachable":True, "asset_count":len(post.get("assets") or [])}
 
 
 def summarize_channel_drafts(token, channel_id, audit_day, max_pages=15):
