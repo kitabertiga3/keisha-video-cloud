@@ -12,6 +12,7 @@ on:
         default: check
         type: choice
         options:
+          - recover_tiktok
           - go_live
           - check
           - preflight
@@ -29,6 +30,11 @@ on:
         description: 'Tanggal video Cloudinary lama untuk audit (tanpa GitHub artifact)'
         required: false
         default: '2026-11-20'
+        type: string
+      failed_schedule_run_id:
+        description: 'Run sumber 2/3 jadwal berhasil, khusus TikTok recovery'
+        required: false
+        default: '44657550853'
         type: string
       source_plan_run_id:
         description: 'Untuk render/drafts: naskah sukses #11 (kosong = buat baru)'
@@ -91,7 +97,7 @@ jobs:
           python -m py_compile autopilot/office_daily.py
           python -m unittest discover -s autopilot -p 'test_*.py' -v
       - name: Periksa channel Buffer tanpa mengirim posting (preflight)
-        if: ${{ env.RUN_MODE == 'preflight' || env.RUN_MODE == 'drafts' || env.RUN_MODE == 'go_live' || env.RUN_MODE == 'schedule' }}
+        if: ${{ env.RUN_MODE == 'preflight' || env.RUN_MODE == 'drafts' || env.RUN_MODE == 'go_live' || env.RUN_MODE == 'schedule' || env.RUN_MODE == 'recover_tiktok' }}
         run: python autopilot/office_daily.py preflight --result autopilot_result.json
       - name: Siapkan SDK Cloudinary untuk audit BACA SAJA
         if: ${{ env.RUN_MODE == 'audit_drafts' }}
@@ -104,8 +110,32 @@ jobs:
             --known-tiktok-draft-id "${{ inputs.known_tiktok_draft_id }}" \
             --result autopilot_result.json
       - name: Pastikan laporan Telegram kantor siap sebelum auto scheduling
-        if: ${{ env.RUN_MODE == 'go_live' || env.RUN_MODE == 'schedule' }}
+        if: ${{ env.RUN_MODE == 'go_live' || env.RUN_MODE == 'schedule' || env.RUN_MODE == 'recover_tiktok' }}
         run: python autopilot/office_daily.py check_reporting
+      - name: Ambil MP4 dan laporan Run #21 untuk pemulihan TIKTOK SAJA
+        if: ${{ env.RUN_MODE == 'recover_tiktok' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: Keisha-Autopilot-Report
+          run-id: ${{ inputs.failed_schedule_run_id }}
+          github-token: ${{ github.token }}
+          path: run21
+      - name: Siapkan FFmpeg dan Cloudinary untuk pemulihan TikTok
+        if: ${{ env.RUN_MODE == 'recover_tiktok' }}
+        run: |
+          set -euo pipefail
+          command -v ffmpeg || { sudo apt-get update && sudo apt-get install -y ffmpeg; }
+          command -v ffprobe
+          python -m pip install 'cloudinary>=1.40,<2'
+      - name: Konversi MP4 Run #21 ke 30 FPS dan jadwalkan HANYA TikTok
+        if: ${{ env.RUN_MODE == 'recover_tiktok' }}
+        run: |
+          python autopilot/office_daily.py recover_tiktok \
+            --plan run21/autopilot_plan.json \
+            --video run21/Keisha_Video_Cloud_Starter_v1/hasil/keisha-rcd-video.mp4 \
+            --metadata run21/Keisha_Video_Cloud_Starter_v1/hasil/metadata.json \
+            --previous-result run21/autopilot_result.json \
+            --result autopilot_result.json
       - name: Ambil naskah AI yang sudah sukses (khusus render)
         if: ${{ (env.RUN_MODE == 'render' || env.RUN_MODE == 'drafts') && inputs.source_plan_run_id != '' }}
         uses: actions/download-artifact@v4
@@ -203,17 +233,17 @@ jobs:
             --metadata Keisha_Video_Cloud_Starter_v1/hasil/metadata.json \
             --result autopilot_result.json
       - name: Simpan receipt jadwal Buffer yang terverifikasi (3/3)
-        if: ${{ env.RUN_MODE == 'schedule' || env.RUN_MODE == 'go_live' }}
+        if: ${{ env.RUN_MODE == 'schedule' || env.RUN_MODE == 'go_live' || env.RUN_MODE == 'recover_tiktok' }}
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: python autopilot/office_daily.py record --result autopilot_result.json
       - name: Aktifkan autopilot harian setelah uji live 3/3 berhasil
-        if: ${{ env.RUN_MODE == 'go_live' }}
+        if: ${{ env.RUN_MODE == 'go_live' || env.RUN_MODE == 'recover_tiktok' }}
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: python autopilot/office_daily.py activate --result autopilot_result.json
       - name: Laporkan kegagalan satu kali tanpa retry posting
-        if: ${{ failure() && (env.RUN_MODE == 'schedule' || env.RUN_MODE == 'go_live') }}
+        if: ${{ failure() && (env.RUN_MODE == 'schedule' || env.RUN_MODE == 'go_live' || env.RUN_MODE == 'recover_tiktok') }}
         run: python autopilot/office_daily.py report_failure
       - name: Simpan laporan dan hasil produksi
         if: always()

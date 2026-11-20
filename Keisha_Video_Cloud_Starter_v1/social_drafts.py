@@ -45,9 +45,17 @@ def validate_video(path, m):
     seconds = float(data.get("format", {}).get("duration", 0))
     if w * 16 != h * 9 or w < 360 or v.get("codec_name") != "h264" or a.get("codec_name") != "aac":
         raise ValueError("MP4 harus vertikal 9:16, H.264 dan AAC.")
+    # TikTok upload requires 23–60 fps. Check this BEFORE Cloudinary/Buffer writes.
+    from fractions import Fraction
+    try:
+        fps = float(Fraction(str(v.get("avg_frame_rate") or v.get("r_frame_rate") or "0/1")))
+    except (ValueError, ZeroDivisionError, OverflowError):
+        fps = 0.0
+    if not (23 <= fps <= 60):
+        raise ValueError(f"FPS video {fps:g} di luar batas TikTok 23–60. Jangan unggah atau jadwalkan.")
     if not (3 <= seconds <= 175) or abs(float(m.get("duration", seconds)) - seconds) > 3:
         raise ValueError("Durasi MP4 tidak sesuai metadata atau terlalu panjang.")
-    return {"width": w, "height": h, "seconds": round(seconds, 2)}
+    return {"width": w, "height": h, "seconds": round(seconds, 2), "fps": round(fps, 3)}
 
 def caption(m):
     title = m["headings"][0].strip().rstrip(".,!?")

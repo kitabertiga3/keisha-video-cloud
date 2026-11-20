@@ -49,6 +49,30 @@ class SocialDraftsTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     module.validate_video(p, self.metadata())
 
+    def test_video_requires_at_least_23_fps_before_upload(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "test.mp4"
+            p.write_bytes(b"0" * 20000)
+            data = {"streams": [
+                {"codec_type":"video", "codec_name":"h264","width":720,
+                 "height":1280,"avg_frame_rate":"15/1"},
+                {"codec_type":"audio","codec_name":"aac"}],
+                "format":{"duration":"35.2"}}
+            with patch.object(module.subprocess,"run", return_value=subprocess.CompletedProcess(
+                        [],0,stdout=json.dumps(data),stderr="")):
+                with self.assertRaisesRegex(ValueError,"FPS"):
+                    module.validate_video(p,self.metadata())
+            data['streams'][0]['avg_frame_rate']="30/1"
+            with patch.object(module.subprocess,"run", return_value=subprocess.CompletedProcess(
+                        [],0,stdout=json.dumps(data),stderr="")):
+                validated=module.validate_video(p,self.metadata())
+            self.assertEqual(validated['fps'],30)
+
+    def test_render_encoder_defaults_to_30fps(self):
+        render=(Path(__file__).resolve().parents[1]/'render_studio.py').read_text(encoding='utf-8')
+        self.assertIn("'fps=30,format=yuv420p'",render)
+        self.assertNotIn("'fps=15,format=yuv420p'",render)
+
     def test_draft_mutation_cannot_publish(self):
         observed = []
         def fake_graphql(token, query):

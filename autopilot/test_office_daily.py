@@ -362,7 +362,7 @@ class Tests(TestCase):
         text = (Path(__file__).resolve().parents[1] /
                 '.github' / 'workflows' / 'keisha_autopilot.yml').read_text(encoding='utf-8')
         self.assertIn('          - preflight', text)
-        self.assertIn("if: ${{ env.RUN_MODE == 'preflight' || env.RUN_MODE == 'drafts' || env.RUN_MODE == 'go_live' || env.RUN_MODE == 'schedule' }}", text)
+        self.assertIn("if: ${{ env.RUN_MODE == 'preflight' || env.RUN_MODE == 'drafts' || env.RUN_MODE == 'go_live' || env.RUN_MODE == 'schedule' || env.RUN_MODE == 'recover_tiktok' }}", text)
         self.assertIn("if: ${{ env.RUN_MODE == 'schedule' || env.RUN_MODE == 'go_live' }}", text)
         self.assertIn("if: ${{ env.RUN_MODE == 'plan' || env.RUN_MODE == 'schedule' || env.RUN_MODE == 'go_live' || ((env.RUN_MODE == 'render' || env.RUN_MODE == 'drafts') && inputs.source_plan_run_id == '') }}", text)
 
@@ -753,6 +753,42 @@ class Tests(TestCase):
         self.assertIn('keisha-autopilot.enabled.json',v)
         self.assertIn('Keisha-Publication-Verification',v)
 
+
+    def test_recovery_requires_matching_partial_source_without_writes(self):
+        import tempfile, json
+        from pathlib import Path
+        from unittest.mock import patch
+        from Keisha_Video_Cloud_Starter_v1 import social_drafts as social
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d)
+            day=m.datetime.now(m.WIB).date().isoformat()
+            p=self.plan();p['date']=day
+            (root/'plan.json').write_text(json.dumps(p))
+            (root/'prior.json').write_text(json.dumps({
+                'date':day,'status':'manual_review','posts':{'facebook':{'id':'abc'}}}))
+            with patch.object(social,'save_scheduled_post') as send:
+                with self.assertRaisesRegex(RuntimeError,'parsial 2/3'):
+                    m.recover_tiktok_run21(root/'plan.json',root/'prior.json',
+                        root/'video.mp4',root/'meta.json',root/'out.json')
+            send.assert_not_called()
+
+    def test_recovery_source_does_not_call_schedule_all(self):
+        import inspect
+        source=inspect.getsource(m.recover_tiktok_run21)
+        self.assertIn("channels['tiktok']", source)
+        self.assertIn("fps=30,format=yuv420p", source)
+        self.assertIn("sd.find_matching_posts", source)
+        self.assertNotIn("schedule_all(", source)
+        self.assertNotIn("for service in ('tiktok','facebook','youtube'):", source)
+
+    def test_recovery_workflow_uses_old_artifact_without_rendering(self):
+        from pathlib import Path
+        yaml=(Path(__file__).resolve().parents[1]/'.github'/
+              'workflows'/'keisha_autopilot.yml').read_text('utf-8')
+        self.assertIn('          - recover_tiktok',yaml)
+        self.assertIn('run-id: ${{ inputs.failed_schedule_run_id }}',yaml)
+        self.assertIn('path: run21',yaml)
+        self.assertIn('python autopilot/office_daily.py recover_tiktok',yaml)
     def test_cannot_invent_ai(self):
         from unittest.mock import patch
         with patch.dict('os.environ', {'CLOUDFLARE_AI_API_TOKEN':'','CLOUDFLARE_ACCOUNT_ID':''}):
