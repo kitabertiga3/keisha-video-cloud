@@ -224,6 +224,12 @@ def save_scheduled_post(token, channel_id, url, text, *, platform, title, due_at
 
 def save_publish_now_post(token, channel_id, url, text, *, platform, title):
     """Submit one video for immediate Buffer delivery; never retry on ambiguity."""
+    # No write if Buffer already has identical caption or this media on this channel.
+    # Fail closed if the inventory cannot be read fully.
+    prior = find_matching_posts(token, channel_id, text, url)
+    if prior:
+        raise RuntimeError("POTENSI DUPLIKAT "+platform+": Buffer sudah memiliki posting identik (ID "
+                           + ",".join(str(x["id"]) for x in prior[:3]) + "). Jangan ulang.")
     metadata = draft_metadata(platform, title)
     q = ("mutation { createPost(input: {"
          f"text: {json.dumps(text, ensure_ascii=False)}, "
