@@ -290,7 +290,12 @@ def plan_for_day(today: date) -> dict:
               "atau koma berturut-turut. "
               "Pilih jam berdasarkan HIPOTESIS audiens, bukan klaim analytics real-time. "
               "Jangan memakai kutipan di teks video.")
-    question = f'Tanggal: {today.isoformat()}. Tema unik hari ini: {focus}. Buat rencana konten lengkap.'
+    question = (f'Tanggal: {today.isoformat()}. Tema unik hari ini: {focus}. '
+                'Buat judul, naskah, contoh tindakan, dan caption BARU. '
+                'Jangan ulangi video sebelumnya berjudul Riset Belajar Sendiri, '
+                'jangan memakai contoh riset dari pengalaman belajar sendiri, '
+                'hindari pembuka atau kalimat promosi identik dengan video sebelumnya. '
+                'Buat rencana konten lengkap.')
     messages = [{'role':'system','content':system},{'role':'user','content':question}]
     # The AI can occasionally produce overlong headings or invalid JSON.
     # Regenerate at most twice; never silently truncate, fabricate, or publish bad content.
@@ -365,6 +370,17 @@ def schedule_all(plan: dict, video: Path, metadata: Path, run_id: int, result_pa
         raise RuntimeError('BUFFER_API_KEY belum tersedia.')
     when = None if publish_now else due_at(date.fromisoformat(plan['date']), plan['posting_time'])
     channels = s.get_channels(os.environ['BUFFER_API_KEY'])
+    # Read-only duplicate inventory BEFORE Cloudinary uploads or Buffer writes.
+    # A missing/failed scan always blocks rather than guessing no duplicate.
+    for service in ('tiktok', 'facebook', 'youtube'):
+        duplicates = s.find_matching_posts(
+            os.environ['BUFFER_API_KEY'], channels[service],
+            plan['captions'][service], '')
+        if duplicates:
+            raise RuntimeError(
+                'POTENSI DUPLIKAT '+service+': Buffer sudah memiliki caption identik '
+                '(IDs: '+','.join(str(x['id']) for x in duplicates[:3])+'). '
+                'Tidak mengunggah atau mengirim posting baru.')
     # A pre-existing Cloudinary object may already have been sent to Buffer in
     # another run. Never re-upload/re-schedule on an ambiguous partial result.
     # Persist a same-date failure receipt for audit and team_ops instead.

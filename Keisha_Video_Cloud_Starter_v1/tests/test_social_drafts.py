@@ -73,6 +73,26 @@ class SocialDraftsTests(unittest.TestCase):
         self.assertIn("'fps=30,format=yuv420p'",render)
         self.assertNotIn("'fps=15,format=yuv420p'",render)
 
+    def test_publish_now_blocks_matching_buffer_post_without_mutation(self):
+        with patch.object(module, "find_matching_posts",
+                          return_value=[{"id":"existing123","status":"sent"}]), \
+             patch.object(module, "graphql") as graphql:
+            with self.assertRaisesRegex(RuntimeError, "DUPLIKAT"):
+                module.save_publish_now_post(
+                    "token", "ch", "https://example.com/new.mp4", "caption",
+                    platform="youtube", title="Topik Baru")
+            graphql.assert_not_called()
+
+    def test_publish_now_aborts_on_failed_inventory_without_mutation(self):
+        with patch.object(module, "find_matching_posts",
+                          side_effect=RuntimeError("Buffer tidak bisa dibaca")), \
+             patch.object(module, "graphql") as graphql:
+            with self.assertRaisesRegex(RuntimeError, "tidak bisa dibaca"):
+                module.save_publish_now_post(
+                    "token", "ch", "https://example.com/new.mp4", "caption",
+                    platform="facebook", title="Topik Baru")
+            graphql.assert_not_called()
+
     def test_draft_mutation_cannot_publish(self):
         observed = []
         def fake_graphql(token, query):
