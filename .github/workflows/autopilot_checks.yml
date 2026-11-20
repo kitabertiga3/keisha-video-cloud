@@ -27,8 +27,12 @@ jobs:
           import yaml
           data=yaml.safe_load(Path('.github/workflows/keisha_autopilot.yml').read_text())
           assert 'jobs' in data and 'daily-office' in data['jobs']
-          guard=data['jobs']['daily-office']['if']
-          assert 'AUTOPILOT_ENABLED' in guard
-          assert 'true' in guard
-          print('Valid workflow YAML with opt-in daily schedule')
+          assert 'guard' in data['jobs']
+          gate=data['jobs']['daily-office']['if']
+          assert 'needs.guard.outputs.allowed' in gate
+          gate_steps=data['jobs']['guard']['steps']
+          assert any('keisha-autopilot.enabled.json' in step.get('run','')
+                     for step in gate_steps)
+          assert 'go_live' in data['on']['workflow_dispatch']['inputs']['mode']['options'] if 'on' in data else True
+          print('Valid workflow YAML: daily schedule gated by persisted activation file')
           PY
