@@ -603,6 +603,76 @@ class Tests(TestCase):
         self.assertIn('--known-tiktok-draft-id "', yml)
         self.assertIn('audit_drafts', yml)
 
+
+    def test_stale_buffer_id_becomes_nonfatal_audit_result(self):
+        from unittest.mock import patch
+        from Keisha_Video_Cloud_Starter_v1 import social_drafts as social
+        with patch.object(social, 'graphql', side_effect=RuntimeError(
+                 'Buffer menolak query: Post not found for id: badpost123')):
+            post = social.read_post_by_id('token', 'badpost123')
+        self.assertEqual(post['status'], 'not_found')
+        self.assertFalse(post['reachable'])
+
+    def test_scheduled_post_has_platform_metadata_and_expected_status(self):
+        from unittest.mock import patch
+        from Keisha_Video_Cloud_Starter_v1 import social_drafts as social
+        for platform in ('tiktok', 'facebook', 'youtube'):
+            with self.subTest(platform=platform):
+                with patch.object(social, 'graphql', return_value={
+                        'createPost': {'post': {'id':'p123', 'status':'scheduled',
+                                               'dueAt':'2026-11-21T12:00:00.000Z'}}}) as g:
+                    post = social.save_scheduled_post('token','channel',
+                        'https://res.cloudinary.com/demo/video/upload/x.mp4',
+                        'Cek link bio, tautan afiliasi.', platform=platform,
+                        title='Video edukasi', due_at='2026-11-21T12:00:00.000Z')
+                self.assertEqual(post['status'],'scheduled')
+                query = g.call_args.args[1]
+                self.assertIn('mode: customScheduled',query)
+                self.assertNotIn('saveToDraft: true',query)
+                if platform!='tiktok':
+                    self.assertIn('metadata: {' + platform + ':', query)
+
+    def test_scheduled_post_does_not_accept_draft_status(self):
+        from unittest.mock import patch
+        from Keisha_Video_Cloud_Starter_v1 import social_drafts as social
+        with patch.object(social, 'graphql', return_value={
+                'createPost': {'post': {'id':'p123', 'status':'draft'}}}):
+            with self.assertRaisesRegex(RuntimeError, 'tidak mengonfirmasi jadwal'):
+                social.save_scheduled_post('token','channel',
+                    'https://res.cloudinary.com/demo/video/upload/x.mp4',
+                    'Caption', platform='facebook', title='Video edukasi',
+                    due_at='2026-11-21T12:00:00.000Z')
+
+    def test_live_audit_with_missing_known_id_still_finishes_without_writes(self):
+        from unittest.mock import patch
+        from Keisha_Video_Cloud_Starter_v1 import social_drafts as social
+        import sys, types
+        cloud=types.ModuleType('cloudinary')
+        api=types.ModuleType('cloudinary.api')
+        cloud.config=lambda **kwargs: None
+        api.resource=lambda *a, **kw: {
+          'public_id':'keisha-drafts/run-20261120',
+          'secure_url':'https://res.cloudinary.com/demo/video/upload/v1/keisha-drafts/run-20261120.mp4'}
+        cloud.api=api
+        with patch.dict(sys.modules,{'cloudinary':cloud,'cloudinary.api':api}), \
+             patch.object(social,'get_channels',return_value={
+                'tiktok':'t','facebook':'f','youtube':'y'}), \
+             patch.object(social,'find_matching_posts',return_value=[]), \
+             patch.object(social,'summarize_channel_drafts',return_value={
+                'scanned':0,'created_on_audit_date':[]}), \
+             patch.object(social,'read_post_by_id',return_value={
+                'id':'badpost123','status':'not_found','reachable':False,'channel_id':None}), \
+             patch.object(social,'save_draft') as save, \
+             patch.object(social,'upload') as upload, \
+             patch.dict('os.environ', {'BUFFER_API_KEY':'token',
+                'CLOUDINARY_CLOUD_NAME':'demo','CLOUDINARY_API_KEY':'key',
+                'CLOUDINARY_API_SECRET':'secret'}):
+            result=m.audit_live_drafts('2026-11-20','badpost123')
+        self.assertEqual(result['status'],'complete_read_only')
+        self.assertEqual(result['channels']['tiktok']['known_id_status'],'not_found')
+        save.assert_not_called()
+        upload.assert_not_called()
+
     def test_cannot_invent_ai(self):
         from unittest.mock import patch
         with patch.dict('os.environ', {'CLOUDFLARE_AI_API_TOKEN':'','CLOUDFLARE_ACCOUNT_ID':''}):
