@@ -996,7 +996,7 @@ def check_reporting_ready() -> None:
 
 def main():
     p=argparse.ArgumentParser()
-    p.add_argument('action',choices=('plan','preflight','drafts','audit_drafts','recover_drafts','schedule','record','activate','verify','check_reporting','prepare_recovery','recover_tiktok','report_failure'))
+    p.add_argument('action',choices=('plan','preflight','drafts','audit_drafts','recover_drafts','schedule','record','activate','verify','check_reporting','prepare_recovery','recover_tiktok','report_failure','publish_now'))
     p.add_argument('--plan',default='autopilot_plan.json')
     p.add_argument('--video',default='Keisha_Video_Cloud_Starter_v1/hasil/keisha-rcd-video.mp4')
     p.add_argument('--metadata',default='Keisha_Video_Cloud_Starter_v1/hasil/metadata.json')
@@ -1055,6 +1055,22 @@ def main():
             status=verify_daily_publication()
             Path(args.result).write_text(json.dumps(status,ensure_ascii=False,indent=2),
                                          encoding='utf-8')
+    elif args.action=='publish_now':
+        plan=json.loads(Path(args.plan).read_text(encoding='utf-8'))
+        if plan.get('date')!=datetime.now(WIB).date().isoformat():
+            raise RuntimeError('Naskah bukan untuk hari ini. Tidak dipublikasikan.')
+        result=schedule_all(plan, Path(args.video), Path(args.metadata),
+                            int(os.environ.get('GITHUB_RUN_ID','0')),
+                            Path(args.result), publish_now=True)
+        telegram_report('📢 Keisha — permintaan Publish Now ' + plan['date'] + '\\n'
+                        + 'Judul: ' + plan['headings'][0] + '\\n'
+                        + 'TikTok: ' + str((result['posts'].get('tiktok') or {}).get('status', 'gagal')) + '\\n'
+                        + 'Facebook: ' + str((result['posts'].get('facebook') or {}).get('status', 'gagal')) + '\\n'
+                        + 'YouTube: ' + str((result['posts'].get('youtube') or {}).get('status', 'gagal')) + '\\n'
+                        + 'Ini hanya konfirmasi respons Buffer, belum bukti tayang publik. '
+                        + 'Tidak ada posting ulang otomatis.')
+        if result['errors']:
+            raise RuntimeError('Pengiriman parsial; periksa Buffer. Jangan ulang otomatis.')
     elif args.action=='schedule':
         plan=json.loads(Path(args.plan).read_text(encoding='utf-8'))
         if plan.get('date')!=datetime.now(WIB).date().isoformat():
