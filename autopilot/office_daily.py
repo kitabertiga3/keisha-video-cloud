@@ -739,6 +739,7 @@ def record_ceo_one_time_test(path: Path) -> None:
     _github_put_new_file(CEO_TEST_RESULT, {
         'date': CEO_TEST_DAY, 'status': 'submitted', 'published_verified': False,
         'posts': posts, 'title': result.get('title',''),
+        'submitted_at_wib': datetime.now(WIB).strftime('%Y-%m-%d %H:%M WIB'),
         'captions': result.get('captions',{})})
 
 
