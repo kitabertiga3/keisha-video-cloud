@@ -571,7 +571,7 @@ def create():
             handle.write(f"file '{image_path.name}'\nduration {seconds:.6f}\n")
         handle.write(f"file '{clips[-1].name}'\n")
     silent = OUT / 'studio-silent.mp4'
-    ff('-safe','0','-f','concat','-i',timeline, '-vf','fps=15,format=yuv420p',
+    ff('-safe','0','-f','concat','-i',timeline, '-vf','fps=30,format=yuv420p',
        '-t',f'{video_length:.3f}','-an','-c:v','libx264','-threads','1',
        '-preset','ultrafast','-crf','27',silent,timeout=240)
     video = OUT / 'keisha-rcd-video.mp4'
