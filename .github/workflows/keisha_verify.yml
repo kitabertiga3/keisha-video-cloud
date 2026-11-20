@@ -1,0 +1,50 @@
+name: Keisha - Verifikasi posting harian ke HQ
+
+on:
+  schedule:
+    - cron: '35 22 * * *'
+      timezone: 'Asia/Jakarta'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: keisha-verify-daily
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - name: Cek flag aktivasi autopilot
+        id: active
+        shell: bash
+        run: |
+          if [[ -f .github/keisha-autopilot.enabled.json ]]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "Autopilot belum aktif; verifikasi harian dilewati."
+          fi
+      - uses: actions/setup-python@v5
+        if: ${{ steps.active.outputs.enabled == 'true' }}
+        with:
+          python-version: '3.11'
+      - name: Periksa status posting Buffer dan lapor ke grup HQ (tanpa posting)
+        if: ${{ steps.active.outputs.enabled == 'true' }}
+        env:
+          BUFFER_API_KEY: ${{ secrets.BUFFER_API_KEY }}
+          TELEGRAM_KEISHA_TOKEN: ${{ secrets.TELEGRAM_KEISHA_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python autopilot/office_daily.py verify --result autopilot_verification.json
+      - name: Simpan bukti verifikasi pengiriman
+        if: ${{ always() && steps.active.outputs.enabled == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: Keisha-Publication-Verification
+          path: autopilot_verification.json
+          if-no-files-found: ignore
+          retention-days: 14
