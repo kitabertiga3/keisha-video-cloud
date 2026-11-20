@@ -351,7 +351,7 @@ def telegram_report(text: str, *, optional: bool = True) -> None:
         print('Peringatan: laporan Telegram tidak berhasil dikirim.', file=sys.stderr)
 
 
-def schedule_all(plan: dict, video: Path, metadata: Path, run_id: int, result_path: Path) -> dict:
+def schedule_all(plan: dict, video: Path, metadata: Path, run_id: int, result_path: Path, *, publish_now: bool = False) -> dict:
     # External writes only occur after every preflight passes.
     base = Path(__file__).resolve().parents[1] / 'Keisha_Video_Cloud_Starter_v1'
     sys.path.insert(0, str(base))
@@ -363,7 +363,7 @@ def schedule_all(plan: dict, video: Path, metadata: Path, run_id: int, result_pa
         raise ValueError('Metadata video tidak cocok dengan naskah AI yang disetujui.')
     if not os.getenv('BUFFER_API_KEY'):
         raise RuntimeError('BUFFER_API_KEY belum tersedia.')
-    when = due_at(date.fromisoformat(plan['date']), plan['posting_time'])
+    when = None if publish_now else due_at(date.fromisoformat(plan['date']), plan['posting_time'])
     channels = s.get_channels(os.environ['BUFFER_API_KEY'])
     # A pre-existing Cloudinary object may already have been sent to Buffer in
     # another run. Never re-upload/re-schedule on an ambiguous partial result.
@@ -375,7 +375,7 @@ def schedule_all(plan: dict, video: Path, metadata: Path, run_id: int, result_pa
             raise
         outcome = {'date': plan['date'], 'video': video_info,
                    'status': 'manual_review', 'published': False,
-                   'due_at_utc': when.isoformat(), 'posts': {},
+                   'due_at_utc': when.isoformat() if when else None, 'posts': {},
                    'errors': [{'platform': 'all',
                                'error': 'ExistingDailyMedia',
                                'detail': 'Media already exists in Cloudinary. Verify Buffer and the daily receipt manually; no new posting attempted.'}]}
@@ -383,15 +383,21 @@ def schedule_all(plan: dict, video: Path, metadata: Path, run_id: int, result_pa
         result_path.write_text(json.dumps(outcome, indent=2, ensure_ascii=False),
                                encoding='utf-8')
         return outcome
-    outcome = {'date': plan['date'], 'video': video_info, 'status': 'partial',
-               'due_at_utc': when.isoformat(), 'cloudinary_url': url, 'posts': {}, 'errors': []}
+    outcome = {'date': plan['date'], 'video': video_info, 'status': 'partial', 'mode': 'publish_now' if publish_now else 'schedule',
+               'due_at_utc': when.isoformat() if when else None, 'cloudinary_url': url, 'posts': {}, 'errors': []}
     for service in ('tiktok','facebook','youtube'):
         try:
-            post = s.save_scheduled_post(
-                os.environ['BUFFER_API_KEY'], channels[service], url,
-                plan['captions'][service], platform=service,
-                title=plan['headings'][0],
-                due_at=when.strftime('%Y-%m-%dT%H:%M:%S.000Z'))
+            if publish_now:
+                post = s.save_publish_now_post(
+                    os.environ['BUFFER_API_KEY'], channels[service], url,
+                    plan['captions'][service], platform=service,
+                    title=plan['headings'][0])
+            else:
+                post = s.save_scheduled_post(
+                    os.environ['BUFFER_API_KEY'], channels[service], url,
+                    plan['captions'][service], platform=service,
+                    title=plan['headings'][0],
+                    due_at=when.strftime('%Y-%m-%dT%H:%M:%S.000Z'))
             outcome['posts'][service] = post
         except Exception as exc:
             outcome['errors'].append({'platform':service, 'error':type(exc).__name__,
@@ -401,7 +407,7 @@ def schedule_all(plan: dict, video: Path, metadata: Path, run_id: int, result_pa
             result_path.parent.mkdir(parents=True, exist_ok=True)
             result_path.write_text(json.dumps(outcome, indent=2, ensure_ascii=False),
                                    encoding='utf-8')
-    outcome['status'] = 'scheduled' if len(outcome['posts']) == 3 else 'manual_review'
+    outcome['status'] = ('submitted' if publish_now else 'scheduled') if len(outcome['posts']) == 3 and not outcome['errors'] else 'manual_review'
     result_path.parent.mkdir(parents=True,exist_ok=True)
     result_path.write_text(json.dumps(outcome,indent=2,ensure_ascii=False),encoding='utf-8')
     return outcome
