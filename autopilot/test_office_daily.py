@@ -362,9 +362,71 @@ class Tests(TestCase):
         text = (Path(__file__).resolve().parents[1] /
                 '.github' / 'workflows' / 'keisha_autopilot.yml').read_text(encoding='utf-8')
         self.assertIn('          - preflight', text)
-        self.assertIn("if: ${{ env.RUN_MODE == 'preflight' }}", text)
+        self.assertIn("if: ${{ env.RUN_MODE == 'preflight' || env.RUN_MODE == 'drafts' }}", text)
         self.assertIn("if: ${{ env.RUN_MODE == 'schedule' }}", text)
-        self.assertIn("if: ${{ env.RUN_MODE == 'plan' || env.RUN_MODE == 'schedule' || (env.RUN_MODE == 'render' && inputs.source_plan_run_id == '') }}", text)
+        self.assertIn("if: ${{ env.RUN_MODE == 'plan' || env.RUN_MODE == 'schedule' || ((env.RUN_MODE == 'render' || env.RUN_MODE == 'drafts') && inputs.source_plan_run_id == '') }}", text)
+
+
+    def test_buffer_draft_requires_explicit_draft_confirmation(self):
+        from unittest.mock import patch
+        from Keisha_Video_Cloud_Starter_v1 import social_drafts as s
+        with patch.object(s, 'graphql', return_value={'createPost':{
+                'post': {'id': 'draft-123', 'status': 'draft'}}}) as call:
+            pid = s.save_draft('token', 'channel', 'https://res.cloudinary.com/video/upload/x.mp4',
+                               'Cek link bio. Tautan afiliasi.')
+        self.assertEqual(pid, 'draft-123')
+        query = call.call_args.args[1]
+        self.assertIn('saveToDraft: true', query)
+        self.assertIn('post { id status }', query)
+        self.assertNotIn('customScheduled', query)
+        with patch.object(s, 'graphql', return_value={'createPost':{
+                'post': {'id': 'post-1', 'status': 'scheduled'}}}):
+            with self.assertRaisesRegex(RuntimeError, 'tidak mengonfirmasi status draft'):
+                s.save_draft('token', 'channel', 'https://res.cloudinary.com/video/upload/x.mp4',
+                             'Cek link bio.')
+
+    def test_drafts_all_uses_platform_captions_and_daily_id(self):
+        from unittest.mock import patch
+        from pathlib import Path
+        from tempfile import TemporaryDirectory
+        from Keisha_Video_Cloud_Starter_v1 import social_drafts as s
+        plan = self.plan()
+        plan['date'] = '2026-11-20'
+        normalized = m.normalize_saved_plan(plan)
+        meta = {'headings': normalized['headings'], 'bodies': normalized['bodies'],
+                'cta': normalized['cta']}
+        with TemporaryDirectory() as d:
+            resultpath = Path(d) / 'result.json'
+            with patch.object(s, 'validate_metadata', return_value=meta), \
+                 patch.object(s, 'validate_video', return_value={'seconds':33}), \
+                 patch.object(s, 'get_channels', return_value={
+                    'tiktok':'a','facebook':'b','youtube':'c'}), \
+                 patch.object(s, 'upload', return_value='https://res.cloudinary.com/demo/video/upload/x.mp4') as up, \
+                 patch.object(s, 'save_draft', side_effect=['x','y','z']) as drafts, \
+                 patch.dict('os.environ', {'BUFFER_API_KEY':'test'}):
+                result = m.drafts_all(normalized, Path(d)/'video.mp4', Path(d)/'meta.json', resultpath)
+                self.assertEqual(result['status'],'drafts_created')
+                self.assertEqual(len(result['drafts']),3)
+                self.assertFalse(result['scheduled'])
+                self.assertFalse(result['published'])
+                self.assertTrue(resultpath.exists())
+                up.assert_called_once()
+                self.assertEqual(up.call_args.args[1], 20261120)
+                captions = [c.args[3] for c in drafts.call_args_list]
+                self.assertEqual(captions, [normalized['captions'][p]
+                    for p in ('tiktok','facebook','youtube')])
+
+    def test_workflow_drafts_mode_is_separate_from_autopublish(self):
+        from pathlib import Path
+        text = (Path(__file__).resolve().parents[1] /
+                '.github' / 'workflows' / 'keisha_autopilot.yml').read_text(encoding='utf-8')
+        self.assertIn('          - drafts', text)
+        self.assertIn("if: ${{ env.RUN_MODE == 'drafts' }}", text)
+        self.assertIn('python autopilot/office_daily.py drafts', text)
+        pub = text.index('      - name: Pastikan video valid lalu jadwalkan SATU ke tiap channel')
+        end = text.index('      - name: Laporkan kegagalan satu kali tanpa retry posting', pub)
+        self.assertIn("if: ${{ env.RUN_MODE == 'schedule' }}", text[pub:end])
+        self.assertNotIn("env.RUN_MODE == 'drafts'", text[pub:end])
 
     def test_cannot_invent_ai(self):
         from unittest.mock import patch
