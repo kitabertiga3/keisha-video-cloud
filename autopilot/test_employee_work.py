@@ -1,9 +1,9 @@
-"""Safety tests for AI Office team board, no Telegram bot impersonation."""
+"""Regression tests: evidence-only role coordination, no fabricated human activity."""
 import json
 from pathlib import Path
 from unittest import TestCase
-from unittest.mock import patch
-from autopilot import employee_work as work
+
+from autopilot.team_ops import build_record, PLATFORMS
 
 class TeamWorkTests(TestCase):
     def plan(self):
@@ -16,63 +16,57 @@ class TeamWorkTests(TestCase):
             "cta":"Cek informasi di link profil",
             "captions":{
                 "tiktok":"Cari ide bermanfaat, cek link profil. Tautan afiliasi.",
-                "facebook":"Kamu bisa mulai dari pertanyaan sederhana, cek link profil. Tautan afiliasi.",
+                "facebook":"Mulai dari pertanyaan sederhana, cek link profil. Tautan afiliasi.",
                 "youtube":"Belajar mulai dari nol, cek link profil. Tautan afiliasi."
             },
             "posting_time":"19:00",
             "reason":"Perkiraan waktu audiens tersedia selepas kerja."
         }
 
-    def test_has_13_correct_job_titles_and_no_faked_completion(self):
-        from unittest.mock import patch
-        p=self.plan()
-        with patch.object(work,"normalize_saved_plan",return_value=p):
-            board=work.prepare_board(p,ask_ai=False)
+    def test_all_13_roles_with_youtube_not_instagram(self):
+        board=build_record(plan=self.plan())
         self.assertEqual(len(board["roles"]),13)
-        self.assertEqual(board["roles"]["raka"]["title"],"YouTube Shorts Specialist")
-        self.assertEqual(board["roles"]["rina"]["title"],"HRD")
-        self.assertEqual(board["roles"]["bima"]["title"],"CEO")
-        self.assertEqual(board["roles"]["keisha"]["status"],"assigned")
-        self.assertFalse(board["publication_confirmed"])
-        self.assertFalse(board["live_office_synced"])
-        self.assertEqual(board["verified_channels"],{})
+        self.assertIn("YouTube",board["roles"]["raka"])
+        self.assertEqual(board["stage"],"planned")
+        self.assertEqual(board["tasks"]["citra"]["status"],"awaiting_buffer")
+        self.assertEqual(board["tasks"]["dita"]["status"],"awaiting_publication_metrics")
+        self.assertIn("not individual bot conversations",board["claim_scope"])
 
-    def test_finish_only_records_real_buffer_post_ids_and_audio_qc(self):
-        p=self.plan()
-        with patch.object(work,"normalize_saved_plan",return_value=p):
-            board=work.prepare_board(p,ask_ai=False)
-        result={"date":p["date"],"status":"manual_review",
-                "video":{"fps":30,"width":720,"height":1280},
-                "posts":{"youtube":{"id":"y123","status":"scheduled"},
-                         "facebook":{"id":"f123","status":"scheduled"}},
+    def test_metadata_and_qc_evidence_required(self):
+        plan=self.plan()
+        with self.assertRaisesRegex(ValueError,"Metadata dan naskah"):
+            build_record(plan=plan,metadata={"headings":plan["headings"],"bodies":plan["bodies"],"cta":"other"})
+        board=build_record(plan=plan,metadata={k:plan[k] for k in ("headings","bodies","cta")})
+        self.assertEqual(board["stage"],"media_verified")
+        self.assertEqual(board["tasks"]["keisha"]["status"],"video_rendered")
+        self.assertEqual(board["tasks"]["bagas"]["status"],"media_metadata_checked")
+
+    def test_partial_buffer_results_do_not_claim_completed(self):
+        plan=self.plan();meta={k:plan[k] for k in ("headings","bodies","cta")}
+        result={"date":plan["date"],"status":"manual_review",
+                "posts":{"youtube":{"id":"youtube-123","status":"scheduled"},
+                         "facebook":{"id":"facebook-123","status":"scheduled"}},
                 "errors":[{"platform":"tiktok","detail":"provider error"}]}
-        final=work.finish_board(board,result)
-        self.assertEqual(final["stage"],"manual_review")
-        self.assertEqual(final["roles"]["citra"]["status"],"pending_manual_review")
-        self.assertEqual(final["roles"]["raka"]["status"],"scheduled_by_buffer")
-        self.assertEqual(final["roles"]["keisha"]["status"],"video_qc_recorded")
-        self.assertFalse(final["publication_confirmed"])
-        self.assertFalse(final["live_office_synced"])
+        board=build_record(plan=plan,metadata=meta,post_result=result)
+        self.assertEqual(board["stage"],"manual_review")
+        self.assertEqual(board["tasks"]["citra"]["status"],"manual_review_required")
+        self.assertEqual(board["tasks"]["raka"]["status"],"buffer_scheduled")
+        self.assertEqual(board["tasks"]["rina"]["scheduled_channels"],2)
 
-    def test_independent_role_review_requests_are_scoped(self):
-        p=self.plan()
-        with patch.object(work,"ai_request",return_value=json.dumps({
-            "prioritas":"Periksa pesan video",
-            "risiko":"Jangan menjanjikan penghasilan",
-            "saran":"Perjelas tindakan konkret"})) as request:
-            for role in ("bima","bagas"):
-                output=work.review_as_role(role,p)
-                self.assertEqual(output["status"],"advice_available")
-        self.assertEqual(request.call_count,2)
-        first=request.call_args_list[0].args[0]
-        self.assertIn("Bima",first[0]["content"])
-        self.assertNotIn("Saya sudah posting",first[0]["content"])
+    def test_all_three_scheduled_still_not_claimed_published(self):
+        plan=self.plan();meta={k:plan[k] for k in ("headings","bodies","cta")}
+        result={"date":plan["date"],"status":"scheduled","errors":[],
+                "posts":{platform:{"id":platform+"-id","status":"scheduled"}
+                         for platform in PLATFORMS}}
+        board=build_record(plan=plan,metadata=meta,post_result=result)
+        self.assertEqual(board["stage"],"scheduled")
+        self.assertEqual(board["tasks"]["rina"]["scheduled_channels"],3)
+        self.assertEqual(board["tasks"]["bima"]["status"],"awaiting_publication_verification")
 
-    def test_integration_only_before_and_after_existing_schedule(self):
-        workflow=Path(__file__).resolve().parents[1]/".github/workflows/keisha_autopilot.yml"
-        raw=workflow.read_text(encoding="utf-8")
-        self.assertIn("employee_work.py prepare",raw)
-        self.assertIn("employee_work.py finish",raw)
-        self.assertIn("autopilot_team.json",raw)
-        self.assertIn("RUN_MODE == 'schedule' || env.RUN_MODE == 'go_live'",raw)
+    def test_existing_workflow_stores_role_board_not_extra_post(self):
+        raw=(Path(__file__).resolve().parents[1]/".github/workflows/keisha_autopilot.yml").read_text("utf-8")
+        self.assertIn("python autopilot/team_ops.py planned",raw)
+        self.assertIn("ai_office_team_status.json",raw)
+        self.assertIn("from autopilot.team_ops import build_record",raw)
+        self.assertIn("env.RUN_MODE == 'schedule' || env.RUN_MODE == 'go_live'",raw)
         self.assertNotIn("TELEGRAM_BIMA_TOKEN",raw)
