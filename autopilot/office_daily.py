@@ -529,6 +529,50 @@ def reconcile_failed_drafts(plan: dict, previous_result: dict, *, create_missing
     return outcome
 
 
+def audit_live_drafts(audit_date: str) -> dict:
+    """Read-only audit from Cloudinary and Buffer. Never requires a GitHub artifact."""
+    base = Path(__file__).resolve().parents[1]
+    if str(base) not in sys.path:
+        sys.path.insert(0, str(base))
+    from Keisha_Video_Cloud_Starter_v1 import social_drafts as s
+    import cloudinary
+    import cloudinary.api
+
+    day = date.fromisoformat(audit_date)
+    if audit_date != day.isoformat():
+        raise ValueError('Format audit date harus YYYY-MM-DD.')
+    fields = ('CLOUDINARY_CLOUD_NAME','CLOUDINARY_API_KEY','CLOUDINARY_API_SECRET')
+    missing = [k for k in fields + ('BUFFER_API_KEY',) if not os.getenv(k, '').strip()]
+    if missing:
+        raise RuntimeError('Konfigurasi audit tidak tersedia: ' + ', '.join(missing))
+    cloudinary.config(cloud_name=os.environ[fields[0]], api_key=os.environ[fields[1]],
+                      api_secret=os.environ[fields[2]], secure=True)
+    identifier = 'keisha-drafts/run-' + day.strftime('%Y%m%d')
+    media = cloudinary.api.resource(identifier, resource_type='video')
+    url = str(media.get('secure_url') or '')
+    if (media.get('public_id') != identifier
+            or not url.startswith('https://res.cloudinary.com/')
+            or '/video/upload/' not in url):
+        raise RuntimeError('Cloudinary tidak mengembalikan video sumber yang diharapkan.')
+
+    token = os.environ['BUFFER_API_KEY']
+    channels = s.get_channels(token)
+    required = ('tiktok','facebook','youtube')
+    if not all(platform in channels for platform in required):
+        raise RuntimeError('Channel Buffer belum lengkap.')
+    output = {'mode':'audit_drafts', 'date':day.isoformat(),
+              'cloudinary_public_id': identifier, 'cloudinary_url':url,
+              'published':False, 'scheduled':False, 'writes_performed':False,
+              'channels':{}}
+    for platform in required:
+        matches = s.find_matching_posts(token, channels[platform], '', url)
+        output['channels'][platform] = {
+            'matches': matches,
+            'status': ('found' if matches else 'not_verified')}
+    output['status'] = 'complete_read_only'
+    return output
+
+
 def preflight_connections() -> dict:
     """Read-only checks before any real posting is enabled.
 
@@ -565,6 +609,7 @@ def main():
     p.add_argument('--metadata',default='Keisha_Video_Cloud_Starter_v1/hasil/metadata.json')
     p.add_argument('--result',default='autopilot_result.json')
     p.add_argument('--previous-result',default='previous_autopilot_result.json')
+    p.add_argument('--audit-date',default='2026-11-20')
     args=p.parse_args()
     if args.action=='plan':
         today=datetime.now(WIB).date()
@@ -581,23 +626,23 @@ def main():
         result=drafts_all(plan, Path(args.video), Path(args.metadata), Path(args.result))
         print('Berhasil menyiapkan', len(result['drafts']), 'DRAF di Buffer. '
               'Tidak ada jadwal atau posting yang dibuat.')
-    elif args.action in ('audit_drafts', 'recover_drafts'):
-        plan=json.loads(Path(args.plan).read_text(encoding='utf-8'))
-        previous=json.loads(Path(args.previous_result).read_text(encoding='utf-8'))
+    elif args.action=='audit_drafts':
         try:
-            result=reconcile_failed_drafts(plan, previous,
-                                           create_missing=(args.action=='recover_drafts'))
+            result=audit_live_drafts(args.audit_date)
         except Exception as exc:
-            result={'mode': args.action, 'status':'blocked', 'detail': str(exc)[:300]}
+            result={'mode':'audit_drafts','date':args.audit_date,'status':'blocked',
+                    'writes_performed':False,'detail':str(exc)[:300]}
             Path(args.result).write_text(json.dumps(result,ensure_ascii=False,indent=2),
                                          encoding='utf-8')
             raise
         Path(args.result).write_text(json.dumps(result,ensure_ascii=False,indent=2),
                                      encoding='utf-8')
-        if result.get('errors'):
-            raise RuntimeError('Pemulihan sebagian gagal. Jangan ulang otomatis, cek artifact.')
-        print(('AUDIT DRAF' if args.action=='audit_drafts' else 'PEMULIHAN DRAF'),
-              'selesai tanpa memublikasikan posting.')
+        print('Audit langsung dari Cloudinary dan Buffer selesai: ',
+              ', '.join(k+':'+v['status'] for k,v in result['channels'].items()),
+              '; tidak ada posting, upload, atau pembuatan draf.')
+    elif args.action=='recover_drafts':
+        raise RuntimeError('Pemulihan draf masih dinonaktifkan sampai audit langsung'
+                           ' Buffer selesai dan sudah diperiksa.')
     elif args.action=='schedule':
         plan=json.loads(Path(args.plan).read_text(encoding='utf-8'))
         if plan.get('date')!=datetime.now(WIB).date().isoformat():
