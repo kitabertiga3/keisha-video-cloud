@@ -351,7 +351,7 @@ def telegram_report(text: str, *, optional: bool = True) -> None:
         print('Peringatan: laporan Telegram tidak berhasil dikirim.', file=sys.stderr)
 
 
-def schedule_all(plan: dict, video: Path, metadata: Path, run_id: int, result_path: Path, *, publish_now: bool = False) -> dict:
+def schedule_all(plan: dict, video: Path, metadata: Path, run_id: int, result_path: Path, *, publish_now: bool = False, ceo_test: bool = False) -> dict:
     # External writes only occur after every preflight passes.
     base = Path(__file__).resolve().parents[1] / 'Keisha_Video_Cloud_Starter_v1'
     sys.path.insert(0, str(base))
@@ -369,7 +369,7 @@ def schedule_all(plan: dict, video: Path, metadata: Path, run_id: int, result_pa
     # another run. Never re-upload/re-schedule on an ambiguous partial result.
     # Persist a same-date failure receipt for audit and team_ops instead.
     try:
-        url = upload_daily_once(video, plan['date'])
+        url = upload_daily_once(video, plan['date'], ceo_test=ceo_test)
     except RuntimeError as exc:
         if 'KUNCI ANTI-SPAM' not in str(exc):
             raise
@@ -416,7 +416,7 @@ def schedule_all(plan: dict, video: Path, metadata: Path, run_id: int, result_pa
     return outcome
 
 
-def upload_daily_once(video: Path, day: str) -> str:
+def upload_daily_once(video: Path, day: str, *, ceo_test: bool = False) -> str:
     import cloudinary
     import cloudinary.api
     import cloudinary.uploader
@@ -425,7 +425,10 @@ def upload_daily_once(video: Path, day: str) -> str:
         raise RuntimeError('Cloudinary Secrets belum tersedia.')
     cloudinary.config(cloud_name=os.environ[fields[0]],api_key=os.environ[fields[1]],
                       api_secret=os.environ[fields[2]],secure=True)
-    public_id = 'keisha-autopilot/' + day
+    if ceo_test and day != '2026-11-21':
+        raise RuntimeError('CEO test hanya diizinkan 21 November 2026.')
+    asset_name = ('ceo-test-' + day) if ceo_test else day
+    public_id = 'keisha-autopilot/' + asset_name
     try:
         cloudinary.api.resource(public_id, resource_type='video')
     except cloudinary.api.NotFound:
@@ -433,7 +436,7 @@ def upload_daily_once(video: Path, day: str) -> str:
     else:
         raise RuntimeError('KUNCI ANTI-SPAM: video tanggal ini sudah pernah diunggah. Dilarang membuat posting kedua.')
     uploaded = cloudinary.uploader.upload(str(video), resource_type='video',folder='keisha-autopilot',
-                                          public_id=day, overwrite=False,unique_filename=False)
+                                          public_id=asset_name, overwrite=False,unique_filename=False)
     url = uploaded.get('secure_url','')
     if not url.startswith('https://res.cloudinary.com/') or '/video/upload/' not in url:
         raise RuntimeError('Cloudinary gagal memberi URL video publik yang sesuai.')
@@ -706,6 +709,38 @@ def record_scheduled_receipt(path: Path) -> dict:
     _github_put_new_file(AUTOPILOT_RECEIPT_DIR + '/' + receipt['date'] + '.json', receipt)
     print('Receipt Buffer 3/3 tersimpan ke repo, tanpa mengulang publikasi.')
     return receipt
+
+
+CEO_TEST_DAY = '2026-11-21'
+CEO_TEST_MARKER = '.github/keisha-ceo-test-2026-11-21.json'
+CEO_TEST_RESULT = '.github/keisha-ceo-test-result-2026-11-21.json'
+
+
+def claim_ceo_one_time_test() -> None:
+    """GitHub Contents API create-only lock, BEFORE any AI/render/Buffer mutations."""
+    day = datetime.now(WIB).date().isoformat()
+    if day != CEO_TEST_DAY:
+        raise RuntimeError('Jalur tes CEO sudah kedaluwarsa; bukan untuk hari berikutnya.')
+    marker = {'date': day, 'status': 'claimed', 'purpose': 'one CEO-authorized live test',
+              'note': 'Never retry automatically even if GitHub/Buffer returns an ambiguous outcome.'}
+    _github_put_new_file(CEO_TEST_MARKER, marker)
+
+
+def record_ceo_one_time_test(path: Path) -> None:
+    """Records submitted post IDs in independent namespace; never overwrite daily receipt."""
+    result = json.loads(path.read_text(encoding='utf-8'))
+    if result.get('status') != 'submitted' or result.get('mode') != 'publish_now':
+        raise RuntimeError('Tes CEO tidak lengkap. Jangan mencoba posting ulang.')
+    posts = result.get('posts') or {}
+    if set(posts) != {'tiktok','facebook','youtube'} or not all(
+            isinstance(v,dict) and v.get('id') and v.get('status') in ('sent','sending','scheduled')
+            for v in posts.values()):
+        raise RuntimeError('Buffer belum mengonfirmasi tiga ID; butuh pemeriksaan manual.')
+    _github_put_new_file(CEO_TEST_RESULT, {
+        'date': CEO_TEST_DAY, 'status': 'submitted', 'published_verified': False,
+        'posts': posts, 'title': result.get('title',''),
+        'submitted_at_wib': datetime.now(WIB).strftime('%Y-%m-%d %H:%M WIB'),
+        'captions': result.get('captions',{})})
 
 
 def record_immediate_receipt(path: Path) -> dict:
@@ -1023,7 +1058,7 @@ def check_reporting_ready() -> None:
 
 def main():
     p=argparse.ArgumentParser()
-    p.add_argument('action',choices=('plan','preflight','drafts','audit_drafts','recover_drafts','schedule','record','activate','verify','check_reporting','prepare_recovery','recover_tiktok','report_failure','publish_now','record_now'))
+    p.add_argument('action',choices=('plan','preflight','drafts','audit_drafts','recover_drafts','schedule','record','activate','verify','check_reporting','prepare_recovery','recover_tiktok','report_failure','publish_now','record_now','ceo_live_test','ceo_test_claim','ceo_test_record'))
     p.add_argument('--plan',default='autopilot_plan.json')
     p.add_argument('--video',default='Keisha_Video_Cloud_Starter_v1/hasil/keisha-rcd-video.mp4')
     p.add_argument('--metadata',default='Keisha_Video_Cloud_Starter_v1/hasil/metadata.json')
@@ -1098,6 +1133,30 @@ def main():
                         + 'Tidak ada posting ulang otomatis.')
         if result['errors']:
             raise RuntimeError('Pengiriman parsial; periksa Buffer. Jangan ulang otomatis.')
+    elif args.action=='ceo_test_claim':
+        claim_ceo_one_time_test()
+    elif args.action=='ceo_test_record':
+        record_ceo_one_time_test(Path(args.result))
+    elif args.action=='ceo_live_test':
+        plan=json.loads(Path(args.plan).read_text(encoding='utf-8'))
+        if datetime.now(WIB).date().isoformat() != CEO_TEST_DAY or plan.get('date') != CEO_TEST_DAY:
+            raise RuntimeError('Tes CEO satu kali sudah kedaluwarsa.')
+        result=schedule_all(plan, Path(args.video), Path(args.metadata),
+                            int(os.environ.get('GITHUB_RUN_ID','0')),
+                            Path(args.result), publish_now=True, ceo_test=True)
+        telegram_report('📢 Tes langsung AI Office '+CEO_TEST_DAY+'\\n'
+                        +'Naya/Nadia/Fajar: naskah selesai. Keisha/Bagas: MP4 lolos QC.\\n'
+                        +'Judul: '+plan['headings'][0]+'\\n'
+                        +'Jam permintaan (WIB): '+datetime.now(WIB).strftime('%H:%M')+'\\n'
+                        +'TikTok — Citra: '+str((result['posts'].get('tiktok') or {}).get('status','gagal'))+'\\n'
+                        +'Facebook — Arga: '+str((result['posts'].get('facebook') or {}).get('status','gagal'))+'\\n'
+                        +'YouTube — Raka: '+str((result['posts'].get('youtube') or {}).get('status','gagal'))+'\\n'
+                        +'Deskripsi TikTok: '+plan['captions']['tiktok'][:450]+'\\n'
+                        +'Deskripsi Facebook: '+plan['captions']['facebook'][:450]+'\\n'
+                        +'Deskripsi YouTube: '+plan['captions']['youtube'][:450]+'\\n'
+                        +'Status Buffer bukan bukti tayang publik. Tidak ada retry otomatis.')
+        if result['errors']:
+            raise RuntimeError('Pengiriman parsial; periksa Buffer, jangan coba ulang.')
     elif args.action=='record_now':
         print('Buffer Publish Now receipt:', record_immediate_receipt(Path(args.result)))
     elif args.action=='schedule':
