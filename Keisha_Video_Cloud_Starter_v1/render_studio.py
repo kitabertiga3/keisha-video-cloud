@@ -134,15 +134,15 @@ def parse_studio_script(raw):
 
 
 _SPOKEN_URL_RE = re.compile(
-    r'(?i)(?:(?:link|tautan)\\s+(?:di\\s+)?(?:profil|bio)\\s*[:\\-]?\\s*)?'
-    r'(?:https?://)?(?:www\\.)?lynk\\.id/dirgakhaa/?'
+    r'(?i)(?:(?:link|tautan)\s+(?:di\s+)?(?:profil|bio)\s*[:\-]?\s*)?'
+    r'(?:https?://)?(?:www\.)?lynk\.id/dirgakhaa/?'
 )
 
 
 def safe_spoken_copy(value):
     """Fail-safe when rendering a video outside the GitHub planner."""
     text = _SPOKEN_URL_RE.sub('link bio', str(value or ''))
-    text = re.sub(r'(?i)\\b(?:link|tautan)\\s+(?:di\\s+)?profil\\b', 'link bio', text)
+    text = re.sub(r'(?i)\b(?:link|tautan)\s+(?:di\s+)?profil\b', 'link bio', text)
     return ' '.join(text.split())
 
 
