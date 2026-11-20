@@ -243,7 +243,7 @@ jobs:
             --metadata Keisha_Video_Cloud_Starter_v1/hasil/metadata.json \
             --result autopilot_result.json
       - name: Pastikan video valid lalu jadwalkan SATU ke tiap channel
-        if: ${{ env.RUN_MODE == 'schedule' || env.RUN_MODE == 'publish_now' || env.RUN_MODE == 'go_live' }}
+        if: ${{ env.RUN_MODE == 'schedule' || env.RUN_MODE == 'go_live' }}
         run: |
           python autopilot/office_daily.py schedule \
             --plan autopilot_plan.json \
