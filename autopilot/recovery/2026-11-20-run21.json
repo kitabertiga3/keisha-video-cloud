@@ -1,0 +1,83 @@
+{
+  "source_run_hint": "Run #21 (recovered from original GitHub artifact archive)",
+  "source_sha256": "bd9175ad7eb93818a11cde0801f573dbbe76bd9abb02461a2b8bd1a3cd1be4c6",
+  "source_bytes": 1461526,
+  "video_url": "https://res.cloudinary.com/uwlux9r0/video/upload/v1795140566/keisha-autopilot/2026-11-20.mp4",
+  "plan": {
+    "headings": [
+      "Mulai Dari Nol",
+      "Mengenal Penyebab",
+      "Tindakan Pertama",
+      "Tindakan Kedua",
+      "Langkah Praktis"
+    ],
+    "bodies": [
+      "Kamu ingin memulai bisnis tapi tidak tahu dari mana harus memulai. Cek link bio untuk informasi lebih lanjut.",
+      "Penyebab utama kegagalan adalah kurangnya pengetahuan tentang cara memulai. Cek link bio untuk mempelajari lebih lanjut.",
+      "Tindakan pertama yang bisa kamu lakukan adalah mencari sumber daya yang tepat. Cek link bio untuk menemukan sumber daya yang kamu butuhkan.",
+      "Tindakan kedua adalah membuat rencana yang matang. Cek link bio untuk mempelajari cara membuat rencana yang efektif.",
+      "Langkah praktis yang bisa kamu lakukan sekarang juga adalah memulai dengan langkah kecil. Cek link bio untuk memulai."
+    ],
+    "cta": "Cek link bio",
+    "captions": {
+      "tiktok": "Mulai bisnis dari rumah dengan informasi yang tepat. Cek link bio: lynk.id/dirgakhaa Tautan afiliasi.",
+      "facebook": "Ingin memulai bisnis tapi tidak tahu dari mana? Cek link bio: lynk.id/dirgakhaa untuk informasi lebih lanjut. Tautan afiliasi.",
+      "youtube": "Cari tahu cara memulai bisnis dari rumah dengan informasi yang akurat. Cek link bio: lynk.id/dirgakhaa Tautan afiliasi."
+    },
+    "posting_time": "19:00",
+    "reason": "Audiens lebih aktif dan memiliki waktu untuk membaca konten pada jam ini.",
+    "date": "2026-11-20",
+    "theme": "Mendesain adegan tanpa menjejalkan banyak tulisan"
+  },
+  "previous_result": {
+    "date": "2026-11-20",
+    "video": {
+      "width": 720,
+      "height": 1280,
+      "seconds": 43.2
+    },
+    "status": "manual_review",
+    "due_at_utc": "2026-11-20T12:00:00+00:00",
+    "cloudinary_url": "https://res.cloudinary.com/uwlux9r0/video/upload/v1795140566/keisha-autopilot/2026-11-20.mp4",
+    "posts": {
+      "facebook": {
+        "id": "6affabd8ca85ebefb0eaa08a",
+        "status": "scheduled",
+        "due_at": "2026-11-20T12:00:00.000Z"
+      },
+      "youtube": {
+        "id": "6affabd80f5eda1a57b36429",
+        "status": "scheduled",
+        "due_at": "2026-11-20T12:00:00.000Z"
+      }
+    },
+    "errors": [
+      {
+        "platform": "tiktok",
+        "error": "RuntimeError",
+        "detail": "Buffer menolak jadwal tiktok: Invalid post: Video frame rate must be at least 23 fps for TikTok."
+      }
+    ]
+  },
+  "metadata": {
+    "voice": "natural",
+    "audio_verified": true,
+    "narration_verified": true,
+    "duration": 43.2,
+    "headings": [
+      "Mulai Dari Nol",
+      "Mengenal Penyebab",
+      "Tindakan Pertama",
+      "Tindakan Kedua",
+      "Langkah Praktis"
+    ],
+    "bodies": [
+      "Kamu ingin memulai bisnis tapi tidak tahu dari mana harus memulai. Cek link bio untuk informasi lebih lanjut.",
+      "Penyebab utama kegagalan adalah kurangnya pengetahuan tentang cara memulai. Cek link bio untuk mempelajari lebih lanjut.",
+      "Tindakan pertama yang bisa kamu lakukan adalah mencari sumber daya yang tepat. Cek link bio untuk menemukan sumber daya yang kamu butuhkan.",
+      "Tindakan kedua adalah membuat rencana yang matang. Cek link bio untuk mempelajari cara membuat rencana yang efektif.",
+      "Langkah praktis yang bisa kamu lakukan sekarang juga adalah memulai dengan langkah kecil. Cek link bio untuk memulai."
+    ],
+    "cta": "Cek link bio"
+  }
+}
