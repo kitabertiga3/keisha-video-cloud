@@ -364,7 +364,7 @@ class Tests(TestCase):
         self.assertIn('          - preflight', text)
         self.assertIn("if: ${{ env.RUN_MODE == 'preflight' || env.RUN_MODE == 'drafts' || env.RUN_MODE == 'go_live' || env.RUN_MODE == 'schedule' || env.RUN_MODE == 'publish_now' || env.RUN_MODE == 'recover_tiktok' || env.RUN_MODE == 'ceo_live_test' }}", text)
         self.assertIn("if: ${{ env.RUN_MODE == 'schedule' || env.RUN_MODE == 'go_live' }}", text)
-        self.assertIn("if: ${{ env.RUN_MODE == 'plan' || env.RUN_MODE == 'schedule' || env.RUN_MODE == 'publish_now' || env.RUN_MODE == 'go_live' || ((env.RUN_MODE == 'render' || env.RUN_MODE == 'drafts') && inputs.source_plan_run_id == '') }}", text)
+        self.assertIn("if: ${{ env.RUN_MODE == 'plan' || env.RUN_MODE == 'schedule' || env.RUN_MODE == 'publish_now' || env.RUN_MODE == 'go_live' || ((env.RUN_MODE == 'render' || env.RUN_MODE == 'drafts') && inputs.source_plan_run_id == '') || env.RUN_MODE == 'ceo_live_test' }}", text)
 
 
     def test_existing_daily_media_never_creates_duplicate_buffer_posts(self):
