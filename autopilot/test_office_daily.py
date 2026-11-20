@@ -301,6 +301,41 @@ class Tests(TestCase):
         self.assertNotIn('BUFFER_API_KEY', step)
         self.assertNotIn('CLOUDINARY_API_SECRET', step)
 
+    def test_video_url_is_removed_but_caption_keeps_official_link(self):
+        data = self.plan()
+        data['bodies'][4] = ('Sekarang saatnya untuk memulai. Lihat info di link profil '
+                             'lynk.id/dirgakhaa untuk memulai perubahan yang sederhana dan realistis.')
+        data['cta'] = 'Lihat di link profil lynk.id/dirgakhaa'
+        result = m.validate_plan(data)
+        self.assertNotIn('lynk.id', str(result['bodies']) + result['cta'])
+        self.assertIn('link bio', result['bodies'][4])
+        self.assertIn('link bio', result['cta'])
+        self.assertTrue(all('lynk.id/dirgakhaa' in v for v in result['captions'].values()))
+
+    def test_link_normalization_is_idempotent(self):
+        s = 'Lihat info di link profil https://lynk.id/dirgakhaa untuk belajar.'
+        once = m.normalize_video_copy(s)
+        self.assertEqual(once, m.normalize_video_copy(once))
+        self.assertNotIn('lynk.id', once)
+        self.assertIn('link bio', once)
+
+    def test_rendered_footer_and_spoken_text_do_not_expose_url(self):
+        from pathlib import Path
+        path = Path(__file__).resolve().parents[1] / 'Keisha_Video_Cloud_Starter_v1' / 'render_studio.py'
+        render = path.read_text(encoding='utf-8')
+        self.assertIn("'Info produk: cek link bio   •   Tautan afiliasi'", render)
+        self.assertIn('safe_spoken_copy(title)', render)
+        self.assertIn('safe_spoken_copy(body)', render)
+        self.assertIn('safe_spoken_copy(cta)', render)
+        self.assertNotIn("'lynk.id/dirgakhaa   •   Tautan afiliasi'", render)
+
+    def test_old_artifact_is_normalized_by_render_workflow(self):
+        from pathlib import Path
+        path = Path(__file__).resolve().parents[1] / '.github' / 'workflows' / 'keisha_autopilot.yml'
+        workflow = path.read_text(encoding='utf-8')
+        self.assertIn('normalize_saved_plan(json.loads(', workflow)
+        self.assertIn('path.write_text(json.dumps(plan, ensure_ascii=False, indent=2)', workflow)
+
     def test_cannot_invent_ai(self):
         from unittest.mock import patch
         with patch.dict('os.environ', {'CLOUDFLARE_AI_API_TOKEN':'','CLOUDFLARE_ACCOUNT_ID':''}):

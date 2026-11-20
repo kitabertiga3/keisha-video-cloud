@@ -133,6 +133,19 @@ def parse_studio_script(raw):
     return headings, bodies, cta
 
 
+_SPOKEN_URL_RE = re.compile(
+    r'(?i)(?:(?:link|tautan)\s+(?:di\s+)?(?:profil|bio)\s*[:\-]?\s*)?'
+    r'(?:https?://)?(?:www\.)?lynk\.id/dirgakhaa/?'
+)
+
+
+def safe_spoken_copy(value):
+    """Fail-safe when rendering a video outside the GitHub planner."""
+    text = _SPOKEN_URL_RE.sub('link bio', str(value or ''))
+    text = re.sub(r'(?i)\b(?:link|tautan)\s+(?:di\s+)?profil\b', 'link bio', text)
+    return ' '.join(text.split())
+
+
 _SPEAK_NUMBERS = {'1':'Pertama', '2':'Kedua', '3':'Ketiga', '4':'Keempat', '5':'Kelima'}
 
 
@@ -142,9 +155,9 @@ def spoken_scene(heading, body, cta=''):
     match = re.match(r'^([1-5])\s*[.)-]\s*(.*)$', title)
     if match:
         title = _SPEAK_NUMBERS[match.group(1)] + ', ' + match.group(2)
-    parts = [title.rstrip(' .!?'), str(body).strip().rstrip(' .!?')]
+    parts = [safe_spoken_copy(title).rstrip(' .!?'), safe_spoken_copy(body).rstrip(' .!?')]
     if cta:
-        parts.append(str(cta).strip().rstrip(' .!?'))
+        parts.append(safe_spoken_copy(cta).rstrip(' .!?'))
     spoken = '. '.join(x for x in parts if x) + '.'
     spoken = re.sub(r'Rp\s*149\.000\b', 'seratus empat puluh sembilan ribu rupiah', spoken, flags=re.I)
     return spoken
@@ -382,7 +395,7 @@ def make_card(path, i, heading, body, cta, style, seed, motif="ide", accent_hex=
     d.rounded_rectangle((40,1086,680,1155),radius=17,fill=footer_bg)
     cta_lines,cta_font=wrap(d,cta,595,2,22,17,True)
     multiline(d,cta_lines,cta_font,58,1098,footer_fg,1.19)
-    d.text((48,1180),'lynk.id/dirgakhaa   •   Tautan afiliasi',font=font(19,True),fill=navy if style=='minimal' else white)
+    d.text((48,1180),'Info produk: cek link bio   •   Tautan afiliasi',font=font(19,True),fill=navy if style=='minimal' else white)
     badge_logo(im,dark=dark)
     im.save(path,optimize=True)
 

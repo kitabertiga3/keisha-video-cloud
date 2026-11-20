@@ -188,25 +188,55 @@ def complete_caption(value: object, platform: str) -> str:
     return caption
 
 
+# Tautan asli hanya untuk caption. Video/voice cukup arahkan ke bio.
+_VIDEO_AFFILIATE_RE = re.compile(
+    r'(?i)(?:(?:link|tautan)\s+(?:di\s+)?(?:profil|bio)\s*[:\-]?\s*)?'
+    r'(?:https?://)?(?:www\.)?lynk\.id/dirgakhaa/?'
+)
+
+
+def normalize_video_copy(value: object) -> object:
+    """Perbaikan editorial aman: jangan membacakan URL atau menaruhnya di slide.
+
+    Link afiliasi yang benar tetap disimpan dalam captions terpisah.
+    """
+    if not isinstance(value, str):
+        return value
+    text = _VIDEO_AFFILIATE_RE.sub('link bio', value)
+    text = re.sub(r'(?i)\b(?:link|tautan)\s+(?:di\s+)?profil\b', 'link bio', text)
+    text = re.sub(r'(?i)\blink\s+di\s+bio\b', 'link bio', text)
+    text = re.sub(r'\s+([.,;:!?])', r'\1', ' '.join(text.split()))
+    return text.strip()
+
+
+def normalize_saved_plan(data: dict) -> dict:
+    validated = validate_plan(data)
+    return {**data, **validated}
+
+
 def validate_plan(data: dict) -> dict:
     if not isinstance(data, dict):
         raise ValueError('Rencana bukan JSON object.')
     heads, bodies = data.get('headings'), data.get('bodies')
     if not isinstance(heads, list) or not isinstance(bodies, list) or len(heads) != 5 or len(bodies) != 5:
         raise ValueError('Naskah harus 5 judul dan 5 isi berbeda.')
-    h = [clean_string(x, 68, f'heading {i}') for i, x in enumerate(heads, 1)]
+    h = [clean_string(normalize_video_copy(x), 68, f'heading {i}') for i, x in enumerate(heads, 1)]
     # Toleransi panjang aman untuk teks yang masih dibungkus oleh render_studio.wrap.
     # Prompt tetap meminta naskah singkat; jangan menolak scene yang hanya lewat 4 karakter.
-    b = [clean_string(x, 220, f'body {i}') for i, x in enumerate(bodies, 1)]
+    b = [clean_string(normalize_video_copy(x), 220, f'body {i}') for i, x in enumerate(bodies, 1)]
     for i, scene in enumerate(b, 1):
         # Reject slogans masquerading as 40-60 second educational narration.
         if (len(scene) < 75 or len(scene.split()) < 11 or
                 len(set(re.findall(r'\w+', scene.lower()))) < 7):
             raise ValueError(f'body {i} terlalu singkat/umum; '
                              'minimal 75 karakter dan 11 kata dengan langkah atau contoh konkret.')
+    if any(OTHER_LINK.search(x) for x in [*h, *b]):
+        raise ValueError('Naskah video mengandung URL lain yang belum disetujui.')
     if len(set(x.lower() for x in h)) != 5 or len(set(x.lower() for x in b)) != 5:
         raise ValueError('Naskah mengulang adegan.')
-    cta = clean_string(data.get('cta'), 56, 'cta')
+    cta = clean_string(normalize_video_copy(data.get('cta')), 56, 'cta')
+    if OTHER_LINK.search(cta):
+        raise ValueError('CTA video mengandung URL lain yang belum disetujui.')
     captions = data.get('captions')
     if not isinstance(captions, dict):
         raise ValueError('Caption tiap platform tidak ada.')
@@ -235,7 +265,10 @@ def plan_for_day(today: date) -> dict:
               "Ebook Cuan dari Rumah Rp149.000, tautan profil lynk.id/dirgakhaa; "
               "JANGAN mengarang isi ebook, testimoni, diskon, hasil, atau keuntungan. "
               "Dilarang janjikan cuan. Caption berbeda per platform, transparan affiliate. "
-              "CTA mengajak lihat info di link profil. Tanpa karakter JSON di isi teks. "
+              "Di judul, adegan, dan CTA hanya katakan 'cek link bio'; JANGAN "
+              "tulis atau eja alamat lynk.id dalam narasi atau teks video. "
+              "Alamat lynk.id/dirgakhaa hanya boleh di captions. "
+              "Tanpa karakter JSON di isi teks. "
               "Balas HANYA satu objek JSON valid (tanpa markdown/penjelasan) berisi: "
               "headings (5 string UNIK, masing-masing 15-55 karakter), "
               "bodies (5 string UNIK, target 100-160 karakter dan minimal 15 kata; " 
