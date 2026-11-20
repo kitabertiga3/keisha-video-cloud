@@ -533,6 +533,76 @@ class Tests(TestCase):
         send.assert_not_called()
 
 
+
+    def test_known_tiktok_post_lookup_is_read_only(self):
+        from unittest.mock import patch
+        from Keisha_Video_Cloud_Starter_v1 import social_drafts as social
+        with patch.object(social, 'graphql', return_value={
+                'post': {'id':'known12345','status':'draft','channelId':'tiktok',
+                         'createdAt':'2026-11-20T01:02:00Z','assets':[{'source':'changed'}]}}) as query:
+            result = social.read_post_by_id('token', 'known12345')
+        self.assertEqual(result['status'], 'draft')
+        self.assertEqual(result['channel_id'], 'tiktok')
+        self.assertIn('post(input: {id: "known12345"})', query.call_args.args[1])
+        self.assertNotIn('mutation', query.call_args.args[1])
+
+    def test_inventory_reads_only_drafts_for_selected_day(self):
+        from unittest.mock import patch
+        from Keisha_Video_Cloud_Starter_v1 import social_drafts as social
+        responses = [
+            {'account': {'organizations': [{'id': 'org'}]}},
+            {'posts': {'edges': [
+                {'node': {'id':'today', 'status':'draft', 'channelId':'channel',
+                          'createdAt':'2026-11-20T01:20:00Z'}},
+                {'node': {'id':'old', 'status':'draft', 'channelId':'channel',
+                          'createdAt':'2026-11-19T01:20:00Z'}}],
+                'pageInfo': {'hasNextPage': False}}}
+        ]
+        with patch.object(social, 'graphql', side_effect=responses) as query:
+            result = social.summarize_channel_drafts('token', 'channel', '2026-11-20')
+        self.assertEqual(result['scanned'], 2)
+        self.assertEqual([p['id'] for p in result['created_on_audit_date']], ['today'])
+        self.assertIn('status: [draft]', query.call_args.args[1])
+        self.assertNotIn('mutation', query.call_args.args[1])
+
+    def test_audit_checks_known_tiktok_id_without_creating_drafts(self):
+        import sys, types
+        from unittest.mock import patch
+        from Keisha_Video_Cloud_Starter_v1 import social_drafts as social
+        cloud = types.ModuleType('cloudinary')
+        api = types.ModuleType('cloudinary.api')
+        cloud.config = lambda **kw: None
+        api.resource = lambda *args, **kw: {
+            'public_id':'keisha-drafts/run-20261120',
+            'secure_url':'https://res.cloudinary.com/demo/video/upload/v1/keisha-drafts/run-20261120.mp4'}
+        cloud.api = api
+        with patch.dict(sys.modules, {'cloudinary': cloud, 'cloudinary.api': api}), \
+             patch.object(social, 'get_channels', return_value={
+                 'tiktok':'t','facebook':'f','youtube':'y'}), \
+             patch.object(social, 'find_matching_posts', return_value=[]), \
+             patch.object(social, 'summarize_channel_drafts', return_value={
+                 'scanned':2, 'created_on_audit_date':[]}), \
+             patch.object(social, 'read_post_by_id', return_value={
+                 'id':'tik12345','status':'draft','channel_id':'t','asset_count':1}), \
+             patch.object(social, 'save_draft') as save, \
+             patch.object(social, 'upload') as upload, \
+             patch.dict('os.environ', {'BUFFER_API_KEY':'token',
+                  'CLOUDINARY_CLOUD_NAME':'demo','CLOUDINARY_API_KEY':'a',
+                  'CLOUDINARY_API_SECRET':'b'}):
+            result = m.audit_live_drafts('2026-11-20', 'tik12345')
+        self.assertEqual(result['channels']['tiktok']['status'], 'confirmed_by_post_id')
+        self.assertEqual(result['known_tiktok_draft']['status'], 'draft')
+        save.assert_not_called()
+        upload.assert_not_called()
+
+    def test_workflow_known_id_only_for_audit(self):
+        from pathlib import Path
+        yml = (Path(__file__).resolve().parents[1] / '.github' /
+               'workflows' / 'keisha_autopilot.yml').read_text(encoding='utf-8')
+        self.assertIn('known_tiktok_draft_id:', yml)
+        self.assertIn('--known-tiktok-draft-id "', yml)
+        self.assertIn('audit_drafts', yml)
+
     def test_cannot_invent_ai(self):
         from unittest.mock import patch
         with patch.dict('os.environ', {'CLOUDFLARE_AI_API_TOKEN':'','CLOUDFLARE_ACCOUNT_ID':''}):
