@@ -1,0 +1,24 @@
+{
+  "date": "2026-11-24",
+  "posts": {
+    "tiktok": {
+      "id": "6b056dac201111cd3bbf5b00",
+      "status": "scheduled",
+      "due_at": "2026-11-24T12:00:00.000Z"
+    },
+    "facebook": {
+      "id": "6b056dac970a347130994247",
+      "status": "scheduled",
+      "due_at": "2026-11-24T12:00:00.000Z"
+    },
+    "youtube": {
+      "id": "6b056dad16f206ca59d6fbc7",
+      "status": "scheduled",
+      "due_at": "2026-11-24T12:00:00.000Z"
+    }
+  },
+  "due_at_utc": "2026-11-24T12:00:00+00:00",
+  "created_at_utc": "2026-11-24T10:57:49.831399+00:00",
+  "status": "scheduled",
+  "published": false
+}
